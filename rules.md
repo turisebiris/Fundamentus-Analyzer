@@ -1,181 +1,221 @@
-Crie um aplicativo web para análise e ranking de ações e FIIs do mercado brasileiro, com foco em filtros quantitativos e atualização manual dos dados.
+# Fundamentus Analyzer – Regras do Sistema
 
-Objetivo geral:
-O app deve coletar dados fundamentalistas do mercado brasileiro a partir do site Fundamentus e gerar rankings com base em critérios quantitativos definidos por mim. A prioridade inicial é implementar o módulo de ações. Depois poderemos expandir para FIIs.
+## Objetivo
 
-Fonte de dados:
-Use como fonte principal o site Fundamentus:
+Criar um aplicativo web para análise e ranking de ações do mercado brasileiro com base em critérios quantitativos, utilizando dados do site Fundamentus.
+
+A versão inicial contempla apenas **ações**. A arquitetura deve permitir expansão futura para FIIs.
+
+---
+
+## Fonte de dados
+
 https://fundamentus.com.br/
 
-Requisitos gerais:
+---
 
-1. O app deve ter interface web.
-2. O relatório precisa poder ser acessado por URL em qualquer dispositivo.
-3. Os dados não devem atualizar automaticamente em segundo plano. A atualização deve acontecer apenas quando eu clicar em um botão do tipo “Atualizar dados”.
-4. Caso você não consiga hospedar o app, gere um projeto pronto para deploy estático, com arquivos organizados e um index funcional, empacotado em .zip, para que eu possa subir no Netlify.
-5. Se for necessário usar API externa, scraping estruturado, proxy, backend serverless ou integração com alguma chave, me informe exatamente o que precisa. Se precisar, posso fornecer chave via Google AI Studio.
+## Requisitos gerais
 
-Escopo inicial:
-Implemente primeiro apenas o ranking de ações brasileiras.
-Estruture o código de forma que futuramente seja fácil adicionar um módulo separado para FIIs.
+1. O app deve ter interface web acessível por URL
+2. Os dados devem ser atualizados **apenas manualmente** por botão “Atualizar dados”
+3. Não deve haver atualização automática
+4. Caso não seja possível hospedar, gerar projeto pronto para deploy (ex: Netlify)
+5. Scraping não deve ocorrer no frontend (devido a CORS)
 
-Lógica do ranking de ações:
-O sistema deve:
+---
 
-1. Coletar os dados das ações no Fundamentus.
-2. Aplicar os filtros eliminatórios abaixo.
-3. Para as ações aprovadas, calcular ranking por indicador.
-4. Somar as pontuações dos indicadores com pesos definidos.
-5. Gerar um ranking geral final.
-6. Limitar a saída às 10 melhores ações aprovadas.
+## Fluxo do sistema
 
-Filtros eliminatórios para ações:
-A ação só permanece na análise se passar nestes critérios:
+1. Coletar dados do Fundamentus
+2. Aplicar filtros eliminatórios
+3. Calcular ranking por indicador
+4. Aplicar pesos
+5. Somar pontuação final
+6. Gerar ranking geral
+7. Exibir apenas as 10 melhores ações
 
-* Dividend Yield >= 6%
+---
+
+## Filtros eliminatórios
+
+A ação só permanece se atender a todos os critérios:
+
+* Dividend Yield ≥ 6%
 * P/L entre 3 e 10
-* Margem Líquida > 10%
+* Margem Líquida > 10% (exceto bancos)
 * P/VP < 10
 * ROE > 12%
 * Liquidez média de 2 meses > 1.000.000
-* CAGR de receita > 10%, mas se esse dado não existir, manter a ação mesmo assim
 
-Regra especial para bancos:
+---
 
-* Para bancos, ignorar o filtro de Margem Líquida, porque esse indicador pode não ser aplicável ou vir zerado nessa fonte
-* Mesmo ignorando o filtro para bancos, trate esse caso com consistência também na etapa de ranking, evitando penalização injusta por campo ausente ou estruturalmente inválido
+## Regra especial para bancos
 
-Direção de preferência de cada indicador:
-Considere como “melhor”:
+* Bancos **não devem ser eliminados** pelo critério de Margem Líquida
+* No ranking de Margem Líquida:
 
-* Dividend Yield: maior é melhor
-* P/L: menor é melhor
-* Margem Líquida: maior é melhor
-* P/VP: menor é melhor
-* ROE: maior é melhor
-* Liquidez 2 meses: maior é melhor
-* CAGR de receita: maior é melhor
+  * Bancos devem receber **rank médio neutro**
+  * O rank médio deve ser calculado com base nas demais empresas válidas
+* O peso da Margem Líquida deve ser mantido normalmente na pontuação final
+* O sistema deve identificar bancos corretamente via setor/subsetor
 
-Método de pontuação:
-Após aplicar os filtros, faça um ranking ordinal por indicador entre as ações restantes.
+---
 
-Exemplo:
+## Direção dos indicadores
 
-* A melhor ação em Dividend Yield recebe nota 1
-* A segunda melhor recebe nota 2
-* E assim por diante
+| Indicador      | Melhor |
+| -------------- | ------ |
+| Dividend Yield | Maior  |
+| P/L            | Menor  |
+| Margem Líquida | Maior  |
+| P/VP           | Menor  |
+| ROE            | Maior  |
+| Liquidez       | Maior  |
 
-Importante:
+---
 
-* A menor pontuação total deve representar a melhor ação
-* Ou seja, menor soma final = melhor colocação no ranking geral
+## Método de ranking
 
-Pesos de cada indicador:
-A nota de cada indicador deve ser multiplicada pelo peso abaixo antes da soma final:
+* Ranking **ordinal**
+* Melhor valor recebe rank 1
+* Segundo melhor rank 2, e assim por diante
 
-* ROE = peso 2.0
-* Margem Líquida = peso 2.0
-* P/L = peso 1.5
-* Dividend Yield = peso 1.0
-* P/VP = peso 1.0
-* CAGR de receita = peso 1.0
-* Liquidez 2 meses = peso 1.0
+---
 
-Fórmula conceitual:
+## Pesos dos indicadores
+
+* ROE = 2.0
+* Margem Líquida = 2.0
+* P/L = 1.5
+* Dividend Yield = 1.0
+* P/VP = 1.0
+* Liquidez = 1.0
+
+---
+
+## Cálculo da pontuação
+
 Pontuação total =
+
 (rank_ROE × 2.0) +
 (rank_MargemLiquida × 2.0) +
 (rank_PL × 1.5) +
 (rank_DY × 1.0) +
 (rank_PVP × 1.0) +
-(rank_CAGR × 1.0) +
 (rank_Liquidez × 1.0)
 
-Tratamento de dados ausentes:
-Defina regras explícitas e robustas para dados faltantes, inválidos ou não aplicáveis.
+* A menor pontuação é a melhor
+* O ranking final deve ser ordenado por menor pontuação total
 
-Regras desejadas:
+---
 
-1. Se CAGR de receita não existir, a ação não deve ser eliminada.
-2. Na etapa de ranking, se CAGR estiver ausente, escolha uma estratégia consistente e documentada. Preferência:
+## Tratamento de dados
 
-   * ou excluir o indicador daquela ação e recalibrar de forma justa,
-   * ou atribuir penalidade padronizada claramente definida.
-3. Para bancos, a Margem Líquida não deve causar eliminação nem distorcer injustamente o ranking.
-4. O app deve registrar no resultado quando algum indicador foi ignorado, ausente ou tratado por regra especial.
+* Não utilizar recalibragem dinâmica por soma de pesos
+* Todos os ativos devem permanecer comparáveis
+* Dados inválidos ou ausentes devem ser tratados de forma neutra
+* Indicadores não aplicáveis devem ser claramente sinalizados no relatório
 
-Desempate:
-Se duas ações tiverem a mesma pontuação total, desempate nesta ordem:
+---
+
+## Desempate
+
+Ordem de desempate:
 
 1. Maior ROE
 2. Maior Dividend Yield
 3. Menor P/L
-4. Maior liquidez de 2 meses
+4. Maior liquidez
 
-Saída esperada no relatório:
-O relatório final deve mostrar:
+---
 
-1. Data e hora da última atualização
-2. Quantidade total de ações analisadas
-3. Quantidade que passou pelos filtros
-4. Ranking final das 10 melhores ações
-5. Para cada ação listada, mostrar:
+## Saída do relatório
 
-   * ticker
-   * nome da empresa, se disponível
-   * setor, se disponível
-   * Dividend Yield
-   * P/L
-   * Margem Líquida
-   * P/VP
-   * ROE
-   * Liquidez 2 meses
-   * CAGR de receita
-   * nota/rank de cada indicador
-   * pontuação ponderada total
-   * posição final no ranking
-6. Mostrar também o motivo de exclusão das ações reprovadas, idealmente em uma aba ou seção separada
+O relatório deve conter:
 
-Interface desejada:
-Crie uma interface limpa e objetiva com:
+### Informações gerais
 
-* botão “Atualizar dados”
-* tabela principal com ordenação
-* opção de visualizar os filtros aplicados
-* opção de visualizar as ações eliminadas e o motivo
-* destaque visual para o top 10
-* layout responsivo para desktop e mobile
+* Data e hora da última atualização
+* Quantidade total de ações analisadas
+* Quantidade que passou nos filtros
 
-Arquitetura desejada:
-Quero um app organizado e fácil de manter. Estruture em módulos, por exemplo:
+### Ranking final (Top 10)
 
-* coleta e parsing de dados
-* normalização e limpeza
-* aplicação de filtros
-* cálculo dos ranks
-* cálculo da pontuação ponderada
-* geração de relatório
+Para cada ação:
+
+* Ticker
+* Nome da empresa (se disponível)
+* Setor (se disponível)
+* Dividend Yield
+* P/L
+* Margem Líquida
+* P/VP
+* ROE
+* Liquidez
+* Rank de cada indicador
+* Pontuação total
+* Posição final
+
+### Ações eliminadas
+
+* Lista das ações excluídas
+* Motivo da exclusão
+
+---
+
+## Interface
+
+O sistema deve conter:
+
+* Botão “Atualizar dados”
+* Tabela principal com ordenação
+* Painel de filtros aplicados
+* Painel de ações eliminadas
+* Destaque visual para o Top 10
+* Layout responsivo
+
+---
+
+## Arquitetura esperada
+
+O código deve ser organizado em módulos:
+
+* coleta de dados
+* normalização
+* filtros
+* ranking
+* pontuação
 * interface
 
-Qualidade e robustez:
+Deve permitir expansão futura para FIIs sem alteração do núcleo do sistema.
 
-1. O código deve ser legível e bem organizado.
-2. Trate falhas de scraping, timeout, bloqueio, mudança de estrutura HTML e campos ausentes.
-3. Documente claramente onde os seletores/parsers do Fundamentus estão sendo usados.
-4. Evite lógica obscura. Prefira funções pequenas e explícitas.
-5. Se houver limitação do Fundamentus para scraping direto no front-end, implemente abordagem adequada com backend ou função serverless.
+---
 
-Entrega:
-Quero que você faça uma destas duas opções:
+## Qualidade
 
-1. Hospede e me entregue uma URL funcional, ou
-2. Gere um projeto completo pronto para deploy, com index e estrutura correta, empacotado em zip para Netlify
+* Código limpo e modular
+* Tratamento de erro robusto
+* Parsing isolado e documentado
+* Evitar lógica ambígua ou implícita
 
-Antes de começar a codar, descreva em poucas linhas:
+---
 
-* a arquitetura que você vai usar
-* como vai coletar os dados
-* como vai lidar com CORS / scraping / atualização manual
-* como vai tratar dados ausentes e regras especiais para bancos
+## Entrega
 
-Depois disso, implemente o projeto.
+O sistema deve:
+
+* funcionar localmente
+* estar pronto para deploy
+* ou ser entregue em formato pronto para hospedagem (ex: zip)
+
+---
+
+## Instrução final
+
+Antes de implementar:
+
+* Apresentar plano técnico
+* Explicar arquitetura e decisões
+* Aguardar confirmação
+
+Somente após aprovação, iniciar implementação
