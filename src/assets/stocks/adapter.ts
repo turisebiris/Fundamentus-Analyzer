@@ -17,33 +17,12 @@
 
 import * as cheerio from 'cheerio';
 import { parseBrNumber, parseBrPercent } from '../../utils/number-br.js';
-import type { RawStock } from '../../core/types.js';
+import { normalizeHeader } from '../../utils/header-normalize.js';
 
-// ---------------------------------------------------------------------------
-// Normalização e mapeamento de cabeçalhos
-// ---------------------------------------------------------------------------
-
-/**
- * Normaliza uma string de cabeçalho:
- *   1. Remove acentos/diacríticos (NFD + strip combining marks).
- *   2. Remove qualquer caractere não-alfanumérico (pontos, espaços, /).
- *   3. Converte para lowercase.
- *
- * Exemplos:
- *   "Liquidez 2 meses" → "liquidez2meses"
- *   "Liq.2meses"       → "liq2meses"
- *   "Mrg. Líq."        → "mrgliq"
- *   "Div.Yield"        → "divyield"
- *   "P/L"              → "pl"
- *   "Cotação"          → "cotacao"
- */
-export function normalizeHeader(raw: string): string {
-  return raw
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .replace(/[^a-z0-9]/gi, '')
-    .toLowerCase();
-}
+// Reexportado para preservar a superfície pública consumida pelos testes e
+// por outros módulos que importavam normalizeHeader diretamente do adapter
+// de ações antes da extração para utils/.
+export { normalizeHeader };
 
 /**
  * Nomes canônicos das colunas que o parser efetivamente lê.
