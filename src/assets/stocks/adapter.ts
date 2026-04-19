@@ -3,46 +3,153 @@
  *
  * Fontes scraping:
  *   - Lista massiva: https://fundamentus.com.br/resultado.php
- *       Tabela única <table id="resultado"> com cabeçalhos:
- *         Papel | Cotação | P/L | P/VP | PSR | Div.Yield | P/Ativo | P/Cap.Giro |
- *         P/EBIT | P/Ativ Circ.Liq | EV/EBIT | EV/EBITDA | Mrg Ebit | Mrg. Líq. |
- *         Liq. Corr. | ROIC | ROE | Liquidez 2 meses | Patrim. Líq |
- *         Dív.Brut/ Patrim. | Cresc. Rec.5a
+ *       Tabela única <table id="resultado">. Os cabeçalhos variam entre
+ *       versões do site (ex.: "Liquidez 2 meses" vs "Liq.2meses"); por isso
+ *       os headers são normalizados antes do mapeamento.
  *
  *   - Detalhes por papel: https://fundamentus.com.br/detalhes.php?papel=TICKER
- *       Página com múltiplas tabelas; as primeiras células trazem "Papel", "Empresa",
- *       "Setor" e "Subsetor".
+ *       Página com múltiplas tabelas; as primeiras células trazem "Papel",
+ *       "Empresa", "Setor" e "Subsetor".
  *
- * Qualquer mudança na estrutura do HTML do Fundamentus deve ser tratada aqui.
+ * Qualquer mudança nos nomes dos cabeçalhos do Fundamentus deve ser tratada
+ * em HEADER_ALIASES abaixo — sem alterar o core do ranking.
  */
 
 import * as cheerio from 'cheerio';
 import { parseBrNumber, parseBrPercent } from '../../utils/number-br.js';
 import type { RawStock } from '../../core/types.js';
 
-const EXPECTED_HEADERS = [
-  'Papel',
-  'Cotação',
-  'P/L',
-  'P/VP',
-  'PSR',
-  'Div.Yield',
-  'P/Ativo',
-  'P/Cap.Giro',
-  'P/EBIT',
-  'P/Ativ Circ.Liq',
-  'EV/EBIT',
-  'EV/EBITDA',
-  'Mrg Ebit',
-  'Mrg. Líq.',
-  'Liq. Corr.',
-  'ROIC',
-  'ROE',
-  'Liquidez 2 meses',
-  'Patrim. Líq',
-  'Dív.Brut/ Patrim.',
-  'Cresc. Rec.5a',
-];
+// ---------------------------------------------------------------------------
+// Normalização e mapeamento de cabeçalhos
+// ---------------------------------------------------------------------------
+
+/**
+ * Normaliza uma string de cabeçalho:
+ *   1. Remove acentos/diacríticos (NFD + strip combining marks).
+ *   2. Remove qualquer caractere não-alfanumérico (pontos, espaços, /).
+ *   3. Converte para lowercase.
+ *
+ * Exemplos:
+ *   "Liquidez 2 meses" → "liquidez2meses"
+ *   "Liq.2meses"       → "liq2meses"
+ *   "Mrg. Líq."        → "mrgliq"
+ *   "Div.Yield"        → "divyield"
+ *   "P/L"              → "pl"
+ *   "Cotação"          → "cotacao"
+ */
+export function normalizeHeader(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9]/gi, '')
+    .toLowerCase();
+}
+
+/**
+ * Nomes canônicos das colunas que o parser efetivamente lê.
+ * Qualquer alias normalizado deve apontar para um destes valores.
+ */
+const REQUIRED_FIELDS = [
+  'papel',
+  'cotacao',
+  'pl',
+  'pvp',
+  'dy',
+  'mrgliq',
+  'roe',
+  'liq2m',
+] as const;
+
+type RequiredField = (typeof REQUIRED_FIELDS)[number];
+
+/**
+ * Mapa de alias normalizado → campo canônico.
+ *
+ * Para adicionar suporte a uma nova variação de nome de coluna, acrescente
+ * uma linha aqui. Normalize manualmente o novo nome com normalizeHeader()
+ * para confirmar o alias correto antes de adicionar.
+ *
+ * Exemplos verificados:
+ *   normalizeHeader("Liquidez 2 meses") === "liquidez2meses"
+ *   normalizeHeader("Liq.2meses")       === "liq2meses"
+ *   normalizeHeader("Liq. 2 Meses")    === "liq2meses"
+ *   normalizeHeader("Mrg. Líq.")       === "mrgliq"
+ *   normalizeHeader("Mrg.Liq.")        === "mrgliq"
+ *   normalizeHeader("Div.Yield")       === "divyield"
+ *   normalizeHeader("P/L")             === "pl"
+ *   normalizeHeader("P/VP")            === "pvp"
+ *   normalizeHeader("Cotação")         === "cotacao"
+ */
+const HEADER_ALIASES: Record<string, RequiredField> = {
+  // Ticker
+  papel: 'papel',
+
+  // Cotação
+  cotacao: 'cotacao',
+  cotac: 'cotacao',
+
+  // P/L
+  pl: 'pl',
+
+  // P/VP
+  pvp: 'pvp',
+
+  // Dividend Yield
+  divyield: 'dy',
+  dy: 'dy',
+  dividendyield: 'dy',
+
+  // Margem Líquida — "Mrg. Líq." e variantes
+  mrgliq: 'mrgliq',
+  mrgliquidez: 'mrgliq',
+  margemliquida: 'mrgliq',
+  mrgliqu: 'mrgliq',
+
+  // ROE
+  roe: 'roe',
+
+  // Liquidez 2 meses — "Liquidez 2 meses", "Liq.2meses", "Liq. 2 Meses" etc.
+  liquidez2meses: 'liq2m',
+  liquidez2mes: 'liq2m',
+  liquidez2m: 'liq2m',
+  liq2meses: 'liq2m',
+  liq2mes: 'liq2m',
+  liq2m: 'liq2m',
+};
+
+/**
+ * Constrói um índice { campo canônico → posição na linha } a partir dos
+ * cabeçalhos reais da tabela. Falha com mensagem clara se alguma coluna
+ * obrigatória não for encontrada após normalização.
+ */
+function buildFieldIndex(headers: string[]): Record<RequiredField, number> {
+  const index: Partial<Record<RequiredField, number>> = {};
+
+  for (let i = 0; i < headers.length; i++) {
+    const normalized = normalizeHeader(headers[i]!);
+    const canonical = HEADER_ALIASES[normalized];
+    // Primeira ocorrência vence; evita sobrescrever se houver duplicata.
+    if (canonical !== undefined && !(canonical in index)) {
+      index[canonical] = i;
+    }
+  }
+
+  const missing = REQUIRED_FIELDS.filter((f) => !(f in index));
+  if (missing.length > 0) {
+    const receivedNormalized = headers.map(normalizeHeader).join(' | ');
+    throw new Error(
+      `Fundamentus resultado.php: colunas obrigatórias não encontradas após normalização: ` +
+        `[${missing.join(', ')}]. ` +
+        `Headers recebidos (normalizados): ${receivedNormalized}`,
+    );
+  }
+
+  return index as Record<RequiredField, number>;
+}
+
+// ---------------------------------------------------------------------------
+// Parser principal — resultado.php
+// ---------------------------------------------------------------------------
 
 export interface ParsedListStock {
   ticker: string;
@@ -56,8 +163,10 @@ export interface ParsedListStock {
 }
 
 /**
- * Faz o parsing de resultado.php. Valida os cabeçalhos para falhar cedo caso a
- * estrutura da página mude.
+ * Faz o parsing de resultado.php.
+ * Normaliza os cabeçalhos antes de indexar as colunas para tolerar variações
+ * de grafia do Fundamentus. Falha com mensagem clara se uma coluna obrigatória
+ * realmente não existir.
  */
 export function parseResultadoHtml(html: string): ParsedListStock[] {
   const $ = cheerio.load(html);
@@ -66,23 +175,12 @@ export function parseResultadoHtml(html: string): ParsedListStock[] {
     throw new Error('Fundamentus resultado.php: tabela #resultado não encontrada.');
   }
 
-  const headers = table
+  const rawHeaders = table
     .find('thead tr th')
     .map((_, th) => $(th).text().trim())
     .get();
 
-  validateHeaders(headers);
-
-  const idx = {
-    papel: headers.indexOf('Papel'),
-    cotacao: headers.indexOf('Cotação'),
-    pl: headers.indexOf('P/L'),
-    pvp: headers.indexOf('P/VP'),
-    dy: headers.indexOf('Div.Yield'),
-    mrgLiq: headers.indexOf('Mrg. Líq.'),
-    roe: headers.indexOf('ROE'),
-    liq2m: headers.indexOf('Liquidez 2 meses'),
-  };
+  const idx = buildFieldIndex(rawHeaders);
 
   const rows: ParsedListStock[] = [];
   table.find('tbody tr').each((_, tr) => {
@@ -102,7 +200,7 @@ export function parseResultadoHtml(html: string): ParsedListStock[] {
       pl: parseBrNumber(cells[idx.pl] ?? null),
       pvp: parseBrNumber(cells[idx.pvp] ?? null),
       dividendYield: parseBrPercent(cells[idx.dy] ?? null),
-      netMargin: parseBrPercent(cells[idx.mrgLiq] ?? null),
+      netMargin: parseBrPercent(cells[idx.mrgliq] ?? null),
       roe: parseBrPercent(cells[idx.roe] ?? null),
       liquidity2m: parseBrNumber(cells[idx.liq2m] ?? null),
     });
@@ -111,15 +209,9 @@ export function parseResultadoHtml(html: string): ParsedListStock[] {
   return rows;
 }
 
-function validateHeaders(actual: string[]): void {
-  const missing = EXPECTED_HEADERS.filter((expected) => !actual.includes(expected));
-  if (missing.length > 0) {
-    throw new Error(
-      `Fundamentus resultado.php: cabeçalhos esperados ausentes: ${missing.join(', ')}. ` +
-        `Recebido: ${actual.join(' | ')}`,
-    );
-  }
-}
+// ---------------------------------------------------------------------------
+// Parser de enriquecimento — detalhes.php
+// ---------------------------------------------------------------------------
 
 export interface ParsedDetails {
   ticker: string;
@@ -131,8 +223,8 @@ export interface ParsedDetails {
 /**
  * Faz o parsing de detalhes.php?papel=TICKER. Extrai Empresa, Setor, Subsetor.
  *
- * A página não possui IDs estáveis nas tabelas; por isso varremos todas as
- * células <td> procurando as labels esperadas e capturamos a célula seguinte.
+ * A página não possui IDs estáveis nas tabelas; varremos todas as células <td>
+ * procurando as labels esperadas e capturamos a célula seguinte.
  */
 export function parseDetalhesHtml(html: string, ticker: string): ParsedDetails {
   const $ = cheerio.load(html);
