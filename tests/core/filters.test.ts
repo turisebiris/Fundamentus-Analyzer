@@ -90,4 +90,33 @@ describe('classifyAndFilter — regras do rules.md', () => {
     const { rejected } = classifyAndFilter([mkStock({ roe: null })]);
     expect(rejected[0]!.reasons[0]!.message).toContain('ROE');
   });
+
+  it('não emite motivo de Margem Líquida para papel não-enriquecido (sem setor/subsetor)', () => {
+    // Cenário: papel caiu no pré-filtro server-side por DY baixo e portanto
+    // não foi enriquecido. Sem setor/subsetor, não dá para confirmar se é
+    // banco; suprimimos o motivo de ML para não gerar ruído indevido.
+    const noSectorBadMl = mkStock({
+      ticker: 'NOSECT3',
+      dividendYield: 0.04,
+      netMargin: 0,
+      sector: null,
+      subsector: null,
+    });
+    const { rejected } = classifyAndFilter([noSectorBadMl]);
+    expect(rejected).toHaveLength(1);
+    const reasons = rejected[0]!.reasons;
+    expect(reasons.some((r) => r.indicator === 'dividendYield')).toBe(true);
+    expect(reasons.some((r) => r.indicator === 'netMargin')).toBe(false);
+  });
+
+  it('continua emitindo motivo de Margem Líquida para não-banco enriquecido', () => {
+    const enrichedBadMl = mkStock({
+      ticker: 'LOWML3',
+      netMargin: 0.05,
+      sector: 'Indústria',
+      subsector: 'Alimentos',
+    });
+    const { rejected } = classifyAndFilter([enrichedBadMl]);
+    expect(rejected[0]!.reasons.some((r) => r.indicator === 'netMargin')).toBe(true);
+  });
 });

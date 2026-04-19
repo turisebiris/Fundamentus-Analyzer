@@ -61,8 +61,16 @@ function collectRejections(stock: ClassifiedStock): RejectionReason[] {
     });
   }
 
-  // Margem Líquida > 10%  (exceto bancos — identificados ANTES deste filtro)
-  if (!stock.isBank) {
+  // Margem Líquida > 10%  (exceto bancos — identificados ANTES deste filtro).
+  //
+  // Só aplicamos o filtro quando o papel foi enriquecido com setor/subsetor.
+  // Papéis não-enriquecidos são aqueles já excluídos pelo pré-filtro
+  // server-side por OUTRO critério (DY, P/L, P/VP, ROE ou Liquidez); sem
+  // setor, não dá para confirmar se é banco. Nesse caso, suprimir o motivo
+  // de ML evita ruído indevido no painel de eliminados sem alterar o núcleo
+  // do ranking (o papel já foi eliminado pelo motivo real).
+  const enriched = stock.sector !== null || stock.subsector !== null;
+  if (!stock.isBank && enriched) {
     if (stock.netMargin === null) {
       reasons.push(missingReason('netMargin'));
     } else if (stock.netMargin <= STOCK_FILTERS.netMargin.min) {
