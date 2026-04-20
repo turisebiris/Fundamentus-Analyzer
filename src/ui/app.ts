@@ -1,133 +1,78 @@
 /**
- * Shell da aplicação. Gerencia estado de atualização e renderização.
- * Coleta só acontece via botão "Atualizar dados" (rules.md).
+ * Shell da aplicação. Gerencia apenas a troca entre as abas
+ * "Ações" e "FIIs". Cada aba mantém seu próprio estado (refresh, snapshot,
+ * pipeline) em módulos independentes.
  */
 
-import { fetchStocks } from '../infra/api.js';
-import { loadSnapshot, saveSnapshot } from '../infra/storage.js';
-import { runPipeline } from '../core/pipeline.js';
-import type { Report, StockSnapshot } from '../core/types.js';
-import { renderRefreshButton } from './components/RefreshButton.js';
-import { renderRankingTable } from './components/RankingTable.js';
-import { renderFiltersPanel } from './components/FiltersPanel.js';
-import { renderRejectedPanel } from './components/RejectedPanel.js';
-import type { RefreshState, SortDirection, SortState } from './types.js';
+import { createStocksView, type StocksViewHandle } from './stocks-view.js';
+import { createFiisView, type FiisViewHandle } from './fiis-view.js';
 
-interface AppState {
-  refresh: RefreshState;
-  error: string | null;
-  snapshot: StockSnapshot | null;
-  report: Report | null;
-  sort: SortState;
+type TabKey = 'stocks' | 'fiis';
+
+interface Tab {
+  key: TabKey;
+  label: string;
+  mount: (host: HTMLElement) => void;
 }
 
 export function createApp(root: HTMLElement): void {
-  const state: AppState = {
-    refresh: 'idle',
-    error: null,
-    snapshot: null,
-    report: null,
-    sort: { key: 'position', direction: 'asc' },
-  };
+  const stocksView: StocksViewHandle = createStocksView();
+  const fiisView: FiisViewHandle = createFiisView();
 
-  const initial = loadSnapshot();
-  if (initial) {
-    state.snapshot = initial;
-    state.report = runPipeline(initial);
-    state.refresh = 'success';
+  const tabs: Tab[] = [
+    { key: 'stocks', label: 'Ações', mount: (host) => stocksView.mount(host) },
+    { key: 'fiis', label: 'FIIs', mount: (host) => fiisView.mount(host) },
+  ];
+
+  let active: TabKey = 'stocks';
+
+  renderShell(root);
+  renderTabs();
+  renderActive();
+
+  function renderShell(el: HTMLElement): void {
+    el.innerHTML = `
+      <header class="app-header">
+        <h1>Fundamentus Analyzer</h1>
+        <p class="muted">
+          Ranking de ativos brasileiros com dados do Fundamentus. Atualização
+          só via botão — sem refresh automático.
+        </p>
+      </header>
+      <nav id="tabs-host" class="tabs" role="tablist"></nav>
+      <section id="tab-content" class="tab-content"></section>
+    `;
   }
 
-  renderLayout(root);
-  render();
-
-  async function handleRefresh(): Promise<void> {
-    state.refresh = 'fetching';
-    state.error = null;
-    render();
-    try {
-      const snapshot = await fetchStocks();
-      state.snapshot = snapshot;
-      state.report = runPipeline(snapshot);
-      state.refresh = 'success';
-      saveSnapshot(snapshot);
-    } catch (err) {
-      state.refresh = 'error';
-      state.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      render();
+  function renderTabs(): void {
+    const host = document.getElementById('tabs-host');
+    if (!host) return;
+    host.innerHTML = '';
+    for (const tab of tabs) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `tab ${active === tab.key ? 'tab--active' : ''}`.trim();
+      btn.textContent = tab.label;
+      btn.setAttribute('role', 'tab');
+      btn.setAttribute('aria-selected', String(active === tab.key));
+      btn.addEventListener('click', () => {
+        if (active === tab.key) return;
+        active = tab.key;
+        renderTabs();
+        renderActive();
+      });
+      host.appendChild(btn);
     }
   }
 
-  function render(): void {
-    const refreshHost = document.getElementById('refresh-host')!;
-    const summaryHost = document.getElementById('summary-host')!;
-    const filtersHost = document.getElementById('filters-host')!;
-    const rankingHost = document.getElementById('ranking-host')!;
-    const rejectedHost = document.getElementById('rejected-host')!;
-    const errorHost = document.getElementById('error-host')!;
-
-    renderRefreshButton(refreshHost, {
-      state: state.refresh,
-      timestamp: state.snapshot?.timestamp ?? null,
-      onClick: handleRefresh,
-    });
-
-    renderFiltersPanel(filtersHost);
-
-    if (state.error) {
-      errorHost.innerHTML = '';
-      const box = document.createElement('div');
-      box.className = 'error-box';
-      box.textContent = state.error;
-      errorHost.appendChild(box);
-    } else {
-      errorHost.innerHTML = '';
-    }
-
-    if (state.report) {
-      summaryHost.innerHTML = `
-        <div class="summary">
-          <span><strong>${state.report.totalAnalyzed}</strong> ações analisadas</span>
-          <span><strong>${state.report.totalApproved}</strong> aprovadas nos filtros</span>
-          <span>Coletadas do Fundamentus: <strong>${state.report.totalCollected}</strong></span>
-        </div>
-      `;
-      renderRankingTable(rankingHost, state.report.top10, { sort: state.sort }, handleSort);
-      renderRejectedPanel(rejectedHost, state.report.rejected);
-    } else {
-      summaryHost.innerHTML = '';
-      rankingHost.innerHTML =
-        '<p class="muted">Clique em “Atualizar dados” para coletar do Fundamentus.</p>';
-      rejectedHost.innerHTML = '';
-    }
+  function renderActive(): void {
+    const content = document.getElementById('tab-content');
+    if (!content) return;
+    // Unmonta ambos antes de montar o ativo, para garantir que só um view
+    // esteja ligado ao DOM por vez.
+    stocksView.unmount();
+    fiisView.unmount();
+    const tab = tabs.find((t) => t.key === active)!;
+    tab.mount(content);
   }
-
-  function handleSort(key: string, direction: SortDirection): void {
-    state.sort = { key, direction };
-    render();
-  }
-}
-
-function renderLayout(root: HTMLElement): void {
-  root.innerHTML = `
-    <header class="app-header">
-      <h1>Fundamentus Analyzer</h1>
-      <p class="muted">
-        Ranking de ações brasileiras com dados do Fundamentus. Atualização só
-        via botão — sem refresh automático.
-      </p>
-    </header>
-    <section id="refresh-host"></section>
-    <section id="error-host"></section>
-    <section id="summary-host"></section>
-    <section id="filters-host"></section>
-    <section id="ranking-host"></section>
-    <section id="rejected-host"></section>
-    <footer class="app-footer">
-      <p class="muted">
-        Menor pontuação = melhor. Bancos ignoram o filtro de Margem Líquida e
-        recebem rank médio neutro no indicador.
-      </p>
-    </footer>
-  `;
 }

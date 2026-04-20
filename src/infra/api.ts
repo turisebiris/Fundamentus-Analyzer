@@ -1,15 +1,31 @@
 /**
- * Cliente HTTP para a função serverless /api/stocks.
+ * Cliente HTTP para as funções serverless /api/stocks e /api/fiis.
  * O frontend NÃO acessa fundamentus.com.br diretamente (CORS).
  */
 
 import type { RawStock, StockSnapshot } from '../core/types.js';
+import type { FiiSnapshot, RawFii } from '../assets/fiis/types.js';
 
-interface ApiResponse {
+interface StocksApiResponse {
   timestamp: string;
   totalCollected: number;
   enrichedCount: number;
   stocks: RawStock[];
+}
+
+interface FiisApiResponse {
+  timestamp: string;
+  totalCollected: number;
+  fiis: RawFii[];
+}
+
+async function extractErrorDetail(res: Response): Promise<string> {
+  try {
+    const body = (await res.json()) as { error?: string };
+    return body?.error ? ` — ${body.error}` : '';
+  } catch {
+    return '';
+  }
 }
 
 export async function fetchStocks(signal?: AbortSignal): Promise<StockSnapshot> {
@@ -19,19 +35,31 @@ export async function fetchStocks(signal?: AbortSignal): Promise<StockSnapshot> 
     signal,
   });
   if (!res.ok) {
-    let detail = '';
-    try {
-      const body = (await res.json()) as { error?: string };
-      detail = body?.error ? ` — ${body.error}` : '';
-    } catch {
-      /* ignore */
-    }
+    const detail = await extractErrorDetail(res);
     throw new Error(`Falha ao atualizar dados (HTTP ${res.status})${detail}`);
   }
-  const data = (await res.json()) as ApiResponse;
+  const data = (await res.json()) as StocksApiResponse;
   return {
     timestamp: data.timestamp,
     totalCollected: data.totalCollected,
     stocks: data.stocks,
+  };
+}
+
+export async function fetchFiis(signal?: AbortSignal): Promise<FiiSnapshot> {
+  const res = await fetch('/api/fiis', {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res);
+    throw new Error(`Falha ao atualizar dados de FIIs (HTTP ${res.status})${detail}`);
+  }
+  const data = (await res.json()) as FiisApiResponse;
+  return {
+    timestamp: data.timestamp,
+    totalCollected: data.totalCollected,
+    fiis: data.fiis,
   };
 }
