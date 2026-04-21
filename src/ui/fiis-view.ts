@@ -61,9 +61,9 @@ export function createFiisView(): FiisViewHandle {
       <section id="fiis-rejected-host"></section>
       <footer class="app-footer">
         <p class="muted">
-          Somente segmentos Logística e Multicategoria são analisados.
-          Qtd de imóveis é filtro apenas; Multicategoria recebe rank neutro
-          (arredondado) em Vacância Média.
+          Maior pontuação = melhor. Somente Logística e Multicategoria são analisados.
+          Vacância excluída para Multicategoria (clean exclusion, pesos renormalizados).
+          Qtd de imóveis é filtro apenas — não entra no ranking.
         </p>
       </footer>
     `;
@@ -130,7 +130,7 @@ export function createFiisView(): FiisViewHandle {
           <span>Coletados do Fundamentus: <strong>${state.report.totalCollected}</strong></span>
         </div>
       `;
-      renderFiiRankingTable(rankingHost, state.report.ranked, { sort: state.sort }, handleSort);
+      renderFiiRankingTable(rankingHost, state.report.top10, state.report.totalApproved, { sort: state.sort }, handleSort);
       renderFiiRejectedPanel(rejectedHost, state.report.rejected);
     } else {
       summaryHost.innerHTML = '';

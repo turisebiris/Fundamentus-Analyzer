@@ -26,15 +26,17 @@ export function renderFiiFiltersPanel(container: HTMLElement): void {
   `;
   details.appendChild(list);
 
-  const weights = document.createElement('div');
-  weights.className = 'panel__weights';
-  weights.innerHTML = `
-    <strong>Pesos (menor pontuação = melhor):</strong>
-    P/VP ${FII_WEIGHTS.pvp.toFixed(1)} · Dividend Yield ${FII_WEIGHTS.dividendYield.toFixed(1)} ·
-    Vacância ${FII_WEIGHTS.vacancy.toFixed(1)} · Liquidez ${FII_WEIGHTS.liquidity.toFixed(1)}
-    · <span class="muted">Qtd de imóveis é filtro apenas — não entra no ranking.</span>
+  const note = document.createElement('div');
+  note.className = 'panel__weights';
+  note.innerHTML = `
+    <strong>Pontuação [0–100%] — maior = melhor.</strong>
+    Score por indicador via normalização min-max (clipping P5/P95 na coorte).
+    Pesos: P/VP ${FII_WEIGHTS.pvp.toFixed(1)} · DY ${FII_WEIGHTS.dividendYield.toFixed(1)} ·
+    Vacância ${FII_WEIGHTS.vacancy.toFixed(1)} · Liquidez ${FII_WEIGHTS.liquidity.toFixed(1)}.
+    Qtd de imóveis é filtro apenas (não entra no ranking).
+    Multicategoria: Vacância excluída; pesos renormalizados automaticamente.
   `;
-  details.appendChild(weights);
+  details.appendChild(note);
 
   container.appendChild(details);
 }

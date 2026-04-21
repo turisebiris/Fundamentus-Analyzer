@@ -1,9 +1,9 @@
 /**
- * Tabela do ranking de FIIs com ordenação por coluna. Colunas conforme
- * rules_fiis.md (saída do relatório).
+ * Tabela do Top 10 de FIIs com ordenação por coluna.
  */
 
 import type { RankedFii } from '../../assets/fiis/types.js';
+import type { FiiIndicatorKey } from '../../assets/fiis/config.js';
 import { formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
 import type { SortDirection, SortState } from '../types.js';
 
@@ -22,7 +22,7 @@ type ColumnKey =
 interface Column {
   key: ColumnKey;
   label: string;
-  rankKey?: keyof RankedFii['ranks'];
+  scoreKey?: FiiIndicatorKey;
   get: (f: RankedFii) => string | number | null;
   format: (value: unknown) => string;
   numeric: boolean;
@@ -60,7 +60,7 @@ const COLUMNS: Column[] = [
   {
     key: 'dividendYield',
     label: 'DY',
-    rankKey: 'dividendYield',
+    scoreKey: 'dividendYield',
     get: (f) => f.dividendYield,
     format: (v) => formatPercent(v as number | null),
     numeric: true,
@@ -68,7 +68,7 @@ const COLUMNS: Column[] = [
   {
     key: 'pvp',
     label: 'P/VP',
-    rankKey: 'pvp',
+    scoreKey: 'pvp',
     get: (f) => f.pvp,
     format: (v) => formatDecimal(v as number | null),
     numeric: true,
@@ -76,7 +76,7 @@ const COLUMNS: Column[] = [
   {
     key: 'liquidity',
     label: 'Liquidez',
-    rankKey: 'liquidity',
+    scoreKey: 'liquidity',
     get: (f) => f.liquidity,
     format: (v) => formatInteger(v as number | null),
     numeric: true,
@@ -91,7 +91,7 @@ const COLUMNS: Column[] = [
   {
     key: 'vacancy',
     label: 'Vacância',
-    rankKey: 'vacancy',
+    scoreKey: 'vacancy',
     get: (f) => f.vacancy,
     format: (v) => formatPercent(v as number | null),
     numeric: true,
@@ -100,7 +100,8 @@ const COLUMNS: Column[] = [
     key: 'score',
     label: 'Pontuação',
     get: (f) => f.score,
-    format: (v) => (typeof v === 'number' ? v.toFixed(2).replace('.', ',') : '—'),
+    format: (v) =>
+      typeof v === 'number' ? `${(v * 100).toFixed(1).replace('.', ',')}%` : '—',
     numeric: true,
   },
 ];
@@ -112,14 +113,22 @@ export interface FiiRankingTableState {
 export function renderFiiRankingTable(
   container: HTMLElement,
   rows: RankedFii[],
+  totalApproved: number,
   state: FiiRankingTableState,
   onSort: (key: string, direction: SortDirection) => void,
 ): void {
   container.innerHTML = '';
 
   const heading = document.createElement('h2');
-  heading.textContent = `Ranking de FIIs aprovados (${rows.length})`;
+  heading.textContent = 'Top 10 FIIs aprovados';
   container.appendChild(heading);
+
+  if (totalApproved > rows.length) {
+    const sub = document.createElement('p');
+    sub.className = 'muted';
+    sub.textContent = `Exibindo ${rows.length} de ${totalApproved} aprovados.`;
+    container.appendChild(sub);
+  }
 
   if (rows.length === 0) {
     const empty = document.createElement('p');
@@ -153,10 +162,9 @@ export function renderFiiRankingTable(
     th.appendChild(button);
     headerRow.appendChild(th);
   }
-  const thFlags = document.createElement('th');
-  thFlags.textContent = 'Observações';
-  headerRow.appendChild(thFlags);
-
+  const thObs = document.createElement('th');
+  thObs.textContent = 'Observações';
+  headerRow.appendChild(thObs);
   thead.appendChild(headerRow);
   table.appendChild(thead);
 
@@ -169,14 +177,16 @@ export function renderFiiRankingTable(
       td.className = col.numeric ? 'numeric' : '';
       td.textContent = col.format(col.get(row));
 
-      if (col.rankKey) {
-        const rankValue = row.ranks[col.rankKey];
-        const rankSpan = document.createElement('span');
-        rankSpan.className = 'rank-badge';
-        rankSpan.textContent = `rank ${formatRank(rankValue)}`;
-        rankSpan.title = `Rank ordinal do indicador ${col.label}`;
-        td.appendChild(document.createTextNode(' '));
-        td.appendChild(rankSpan);
+      if (col.scoreKey) {
+        const scoreValue = row.scores[col.scoreKey];
+        if (scoreValue !== undefined) {
+          const badge = document.createElement('span');
+          badge.className = 'rank-badge';
+          badge.textContent = `${(scoreValue * 100).toFixed(1).replace('.', ',')}%`;
+          badge.title = `Percentil do indicador ${col.label} na coorte`;
+          td.appendChild(document.createTextNode(' '));
+          td.appendChild(badge);
+        }
       }
 
       tr.appendChild(td);
@@ -195,7 +205,6 @@ export function renderFiiRankingTable(
       }
     }
     tr.appendChild(tdFlags);
-
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -226,9 +235,4 @@ function compareByKey(
     result = String(av).localeCompare(String(bv), 'pt-BR');
   }
   return direction === 'asc' ? result : -result;
-}
-
-function formatRank(rank: number): string {
-  if (Number.isInteger(rank)) return String(rank);
-  return rank.toFixed(2).replace('.', ',');
 }

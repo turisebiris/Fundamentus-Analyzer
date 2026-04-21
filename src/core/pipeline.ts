@@ -1,87 +1,97 @@
 /**
- * Orquestrador do pipeline de análise (rules.md).
+ * Orquestrador do pipeline de análise de ações (rules.md).
  *
- * Ordem obrigatória:
- *   1. Classificar bancos (setor/subsetor)            -> filters.classifyAndFilter
- *   2. Aplicar filtros eliminatórios                   -> filters.classifyAndFilter
- *      (Margem Líquida ignorada para bancos)
- *   3. Para cada indicador, calcular rank ordinal.     -> ranking/ordinal
- *      Margem Líquida usa rank médio neutro em bancos  -> ranking/neutral-bank
- *   4. Somar pontuação ponderada (pesos FIXOS).        -> score.computeWeightedScore
- *   5. Ordenar por menor pontuação, aplicar desempate. -> tiebreak.compareByScoreThenTiebreakers
- *   6. Atribuir posição final e limitar ao Top 10.
+ * Ordem:
+ *   1. Classificar bancos + aplicar filtros eliminatórios  (filters.ts)
+ *   2. Calcular score percentil [0, 1] por indicador      (ranking/percentile.ts)
+ *      - ML: coorte = apenas não-bancos com valor válido
+ *      - Demais: todos os aprovados com valor válido
+ *   3. Pontuação final: média ponderada renormalizada      (score.ts)
+ *      - Bancos: ML excluída (clean exclusion); divisor usa apenas pesos aplicáveis
+ *   4. Ordenar por pontuação DESC (maior = melhor); desempate por valores brutos
+ *   5. Atribuir posição; retornar Top 10 + todos os reprovados
  */
 
 import type { IndicatorKey } from '../shared/stocks/config.js';
-import { ALL_INDICATORS, STOCK_DIRECTIONS } from '../shared/stocks/config.js';
+import { ALL_INDICATORS, STOCK_DIRECTIONS, STOCK_WEIGHTS } from '../shared/stocks/config.js';
 import { classifyAndFilter } from './filters.js';
-import { rankOrdinal } from './ranking/ordinal.js';
-import { rankNetMarginWithNeutralBanks } from './ranking/neutral-bank.js';
-import { computeWeightedScore } from './score.js';
+import { computeMinMaxScore } from './ranking/percentile.js';
+import { computeRenormalizedScore } from './score.js';
 import { compareByScoreThenTiebreakers } from './tiebreak.js';
 import type { ClassifiedStock, RankedStock, Report, StockSnapshot } from './types.js';
 
 export function runPipeline(snapshot: StockSnapshot): Report {
   const { approved, rejected } = classifyAndFilter(snapshot.stocks);
 
-  const netMarginOutput = rankNetMarginWithNeutralBanks(approved);
+  // Scores por indicador — Map<ticker, score [0,1]>
+  const indicatorScoreMap: Partial<Record<IndicatorKey, Map<string, number>>> = {};
+  const indicatorExcludedSet: Partial<Record<IndicatorKey, Set<string>>> = {};
 
-  // Ranks dos demais indicadores: ordinal simples entre os aprovados.
-  const otherRanks: Partial<Record<IndicatorKey, Map<string, number>>> = {};
-  const missingByIndicator: Partial<Record<IndicatorKey, Set<string>>> = {};
+  // ML: coorte = somente não-bancos (bancos não participam do cálculo de P5/P95)
+  {
+    const nonBanks = approved.filter((s) => !s.isBank);
+    const results = computeMinMaxScore(
+      nonBanks.map((s) => ({ ticker: s.ticker, value: s.netMargin })),
+      'higher',
+    );
+    const scoreMap = new Map<string, number>();
+    const excluded = new Set<string>();
+    for (const r of results) {
+      if (r.wasExcluded) excluded.add(r.ticker);
+      else scoreMap.set(r.ticker, r.score);
+    }
+    indicatorScoreMap.netMargin = scoreMap;
+    indicatorExcludedSet.netMargin = excluded;
+  }
 
+  // Demais indicadores: coorte = todos os aprovados
   for (const indicator of ALL_INDICATORS) {
     if (indicator === 'netMargin') continue;
-    const ranked = rankOrdinal(
+    const results = computeMinMaxScore(
       approved.map((s) => ({ ticker: s.ticker, value: indicatorValue(s, indicator) })),
       STOCK_DIRECTIONS[indicator],
     );
-    const rankMap = new Map<string, number>();
-    const missingSet = new Set<string>();
-    for (const r of ranked) {
-      rankMap.set(r.ticker, r.rank);
-      if (r.wasMissing) missingSet.add(r.ticker);
+    const scoreMap = new Map<string, number>();
+    const excluded = new Set<string>();
+    for (const r of results) {
+      if (r.wasExcluded) excluded.add(r.ticker);
+      else scoreMap.set(r.ticker, r.score);
     }
-    otherRanks[indicator] = rankMap;
-    missingByIndicator[indicator] = missingSet;
+    indicatorScoreMap[indicator] = scoreMap;
+    indicatorExcludedSet[indicator] = excluded;
   }
 
   const scored: RankedStock[] = approved.map((s) => {
-    const ranks: Record<IndicatorKey, number> = {
-      roe: otherRanks.roe!.get(s.ticker)!,
-      netMargin: netMarginOutput.ranks.get(s.ticker)!,
-      pl: otherRanks.pl!.get(s.ticker)!,
-      dividendYield: otherRanks.dividendYield!.get(s.ticker)!,
-      pvp: otherRanks.pvp!.get(s.ticker)!,
-      liquidity2m: otherRanks.liquidity2m!.get(s.ticker)!,
-    };
-
+    const scores: Partial<Record<IndicatorKey, number>> = {};
     const flags: string[] = [];
-    if (netMarginOutput.neutralTickers.has(s.ticker)) {
-      flags.push('banco — rank médio neutro em Margem Líquida');
-    }
-    if (netMarginOutput.missingNonBanks.has(s.ticker)) {
-      flags.push('Margem Líquida ausente — pior rank no indicador');
-    }
+
     for (const indicator of ALL_INDICATORS) {
-      if (indicator === 'netMargin') continue;
-      const missing = missingByIndicator[indicator];
-      if (missing?.has(s.ticker)) {
-        flags.push(`${indicatorLabel(indicator)} ausente — pior rank no indicador`);
+      // Bancos: ML não se aplica — clean exclusion, sem penalidade
+      if (indicator === 'netMargin' && s.isBank) continue;
+
+      const v = indicatorScoreMap[indicator]?.get(s.ticker);
+      if (v !== undefined) {
+        scores[indicator] = v;
+      } else if (indicatorExcludedSet[indicator]?.has(s.ticker)) {
+        // Valor ausente (caso raro pós-filtros): clean exclusion, não penaliza
+        flags.push(`${indicatorLabel(indicator)} ausente — excluída do cálculo`);
       }
     }
 
-    const score = computeWeightedScore(ranks);
+    if (s.isBank) {
+      flags.push('ML não aplicável (banco) — excluída do cálculo');
+    }
 
     return {
       ...s,
-      ranks,
-      score,
+      scores,
+      score: computeRenormalizedScore(scores, STOCK_WEIGHTS),
       flags,
       position: 0,
     };
   });
 
+  // Ordenar por score DESC; desempate por indicadores brutos
   scored.sort(compareByScoreThenTiebreakers);
   scored.forEach((s, idx) => {
     s.position = idx + 1;

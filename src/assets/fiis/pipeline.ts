@@ -1,31 +1,27 @@
 /**
  * Orquestrador do pipeline de análise de FIIs (rules_fiis.md).
  *
- * Ordem obrigatória:
- *   1. Classificar segmento                 → somente Logística e Multicategoria
- *      continuam; os demais são descartados antes de qualquer filtro.
- *   2. Aplicar filtros eliminatórios gerais  → DY ≥ 7%, Liquidez ≥ 500 k,
- *      P/VP ∈ [0.7, 1.1].
- *   3. Aplicar filtros específicos de Logística → Qtd de imóveis > 3,
- *      Vacância Média ≤ 10%.
- *      Multicategoria NÃO usa Qtd de imóveis nem Vacância como filtro.
- *   4. Ranking ordinal dense por indicador:
- *        - DY, P/VP, Liquidez → rank sobre TODOS os aprovados.
- *        - Vacância           → rank sobre APENAS Logística com valor válido;
- *                                Multicategoria recebe rank médio neutro
- *                                arredondado ao inteiro mais próximo.
- *   5. Pontuação ponderada fixa (rules_fiis.md). Menor = melhor.
- *   6. Desempate: menor P/VP → maior DY → maior Liquidez → menor Vacância.
- *   7. Posição final (1 = melhor).
+ * Ordem:
+ *   1. Classificar segmento — descarta silenciosamente os fora da lista.
+ *   2. Filtros eliminatórios gerais (DY ≥ 7%, Liq ≥ 500k, P/VP ∈ [0.7, 1.1]).
+ *   3. Filtros específicos de Logística (Qtd > 3, Vacância ≤ 10%).
+ *   4. Score percentil [0, 1] por indicador:
+ *      - DY, P/VP, Liquidez → coorte = todos os aprovados.
+ *      - Vacância           → coorte = somente Logística aprovados.
+ *        Multicategoria: Vacância excluída (clean exclusion, sem penalidade).
+ *   5. Pontuação renormalizada. Maior = melhor.
+ *   6. Ordenar DESC; desempate por valores brutos.
+ *   7. Posição; retornar Top 10.
  */
 
-import { rankOrdinal } from '../../core/ranking/ordinal.js';
+import { computeMinMaxScore } from '../../core/ranking/percentile.js';
+import { computeRenormalizedScore } from '../../core/score.js';
 import {
-  FII_ALLOWED_SEGMENTS,
   FII_FILTERS,
   FII_INDICATOR_LABELS,
   FII_TIEBREAKER_ORDER,
   FII_WEIGHTS,
+  FII_ALLOWED_SEGMENTS,
   type FiiIndicatorKey,
   type FiiSegment,
 } from './config.js';
@@ -56,20 +52,14 @@ function classifySegment(raw: string | null): FiiSegment | null {
   const normalized = normalizeSegmentText(raw);
   if (!normalized) return null;
   for (const allowed of FII_ALLOWED_SEGMENTS) {
-    if (normalizeSegmentText(allowed) === normalized) {
-      return allowed;
-    }
+    if (normalizeSegmentText(allowed) === normalized) return allowed;
   }
   return null;
 }
 
 function classify(raw: RawFii): ClassifiedFii {
   const normalizedSegment = classifySegment(raw.segment);
-  return {
-    ...raw,
-    normalizedSegment,
-    allowedSegment: normalizedSegment !== null,
-  };
+  return { ...raw, normalizedSegment, allowedSegment: normalizedSegment !== null };
 }
 
 // ---------------------------------------------------------------------------
@@ -79,55 +69,35 @@ function classify(raw: RawFii): ClassifiedFii {
 function collectRejections(fii: ClassifiedFii): FiiRejectionReason[] {
   const reasons: FiiRejectionReason[] = [];
 
-  // Gerais
   if (fii.dividendYield === null) {
     reasons.push(missingReason('dividendYield'));
   } else if (fii.dividendYield < FII_FILTERS.dividendYield.min) {
-    reasons.push({
-      indicator: 'dividendYield',
-      message: `${FII_INDICATOR_LABELS.dividendYield} abaixo de 7%`,
-    });
+    reasons.push({ indicator: 'dividendYield', message: `${FII_INDICATOR_LABELS.dividendYield} abaixo de 7%` });
   }
 
   if (fii.liquidity === null) {
     reasons.push(missingReason('liquidity'));
   } else if (fii.liquidity < FII_FILTERS.liquidity.min) {
-    reasons.push({
-      indicator: 'liquidity',
-      message: `${FII_INDICATOR_LABELS.liquidity} abaixo de 500.000`,
-    });
+    reasons.push({ indicator: 'liquidity', message: `${FII_INDICATOR_LABELS.liquidity} abaixo de 500.000` });
   }
 
   if (fii.pvp === null) {
     reasons.push(missingReason('pvp'));
   } else if (fii.pvp < FII_FILTERS.pvp.min || fii.pvp > FII_FILTERS.pvp.max) {
-    reasons.push({
-      indicator: 'pvp',
-      message: `${FII_INDICATOR_LABELS.pvp} fora do intervalo 0,7 a 1,1`,
-    });
+    reasons.push({ indicator: 'pvp', message: `${FII_INDICATOR_LABELS.pvp} fora do intervalo 0,7 a 1,1` });
   }
 
-  // Específicos de Logística
   if (fii.normalizedSegment === 'Logística') {
     if (fii.propertyCount === null) {
-      reasons.push({
-        indicator: 'propertyCount',
-        message: 'Qtd de imóveis ausente ou inválida',
-      });
+      reasons.push({ indicator: 'propertyCount', message: 'Qtd de imóveis ausente ou inválida' });
     } else if (fii.propertyCount <= FII_FILTERS.propertyCount.min) {
-      reasons.push({
-        indicator: 'propertyCount',
-        message: 'Qtd de imóveis não supera 3',
-      });
+      reasons.push({ indicator: 'propertyCount', message: 'Qtd de imóveis não supera 3' });
     }
 
     if (fii.vacancy === null) {
       reasons.push(missingReason('vacancy'));
     } else if (fii.vacancy > FII_FILTERS.vacancy.max) {
-      reasons.push({
-        indicator: 'vacancy',
-        message: `${FII_INDICATOR_LABELS.vacancy} acima de 10%`,
-      });
+      reasons.push({ indicator: 'vacancy', message: `${FII_INDICATOR_LABELS.vacancy} acima de 10%` });
     }
   }
 
@@ -135,82 +105,24 @@ function collectRejections(fii: ClassifiedFii): FiiRejectionReason[] {
 }
 
 function missingReason(indicator: FiiIndicatorKey): FiiRejectionReason {
-  return {
-    indicator,
-    message: `${FII_INDICATOR_LABELS[indicator]} ausente ou inválido`,
-  };
+  return { indicator, message: `${FII_INDICATOR_LABELS[indicator]} ausente ou inválido` };
 }
 
 // ---------------------------------------------------------------------------
-// Ranking
+// Desempate
 // ---------------------------------------------------------------------------
 
-interface VacancyRankOutput {
-  ranks: Map<string, number>;
-  neutralTickers: Set<string>;
-  neutralRank: number;
-  missingLogistics: Set<string>;
-}
-
-/**
- * Vacância Média:
- *   - Rank ordinal dense APENAS entre FIIs Logística com valor válido.
- *   - Logística sem valor válido recebe o pior rank desse subconjunto
- *     (via rankOrdinal, consistente com a política de ausentes de ações).
- *   - Multicategoria recebe o rank médio das observações válidas,
- *     arredondado ao inteiro mais próximo (rules_fiis.md).
- */
-function rankVacancyWithNeutralMulti(approved: ClassifiedFii[]): VacancyRankOutput {
-  const logisticFiis = approved.filter((f) => f.normalizedSegment === 'Logística');
-
-  const logisticRanks = rankOrdinal(
-    logisticFiis.map((f) => ({ ticker: f.ticker, value: f.vacancy })),
-    'lower', // menor vacância é melhor
-  );
-
-  const validRanks = logisticRanks
-    .filter((r) => !r.wasMissing)
-    .map((r) => r.rank);
-
-  const neutralRaw =
-    validRanks.length === 0
-      ? 1
-      : validRanks.reduce((sum, r) => sum + r, 0) / validRanks.length;
-  const neutralRank = Math.round(neutralRaw);
-
-  const ranks = new Map<string, number>();
-  const neutralTickers = new Set<string>();
-  const missingLogistics = new Set<string>();
-
-  for (const r of logisticRanks) {
-    ranks.set(r.ticker, r.rank);
-    if (r.wasMissing) missingLogistics.add(r.ticker);
+function indicatorValue(fii: ClassifiedFii, key: FiiIndicatorKey): number | null {
+  switch (key) {
+    case 'dividendYield': return fii.dividendYield;
+    case 'pvp':           return fii.pvp;
+    case 'liquidity':     return fii.liquidity;
+    case 'vacancy':       return fii.vacancy;
   }
-
-  for (const f of approved) {
-    if (f.normalizedSegment === 'Multicategoria') {
-      ranks.set(f.ticker, neutralRank);
-      neutralTickers.add(f.ticker);
-    }
-  }
-
-  return { ranks, neutralTickers, neutralRank, missingLogistics };
-}
-
-// ---------------------------------------------------------------------------
-// Score e desempate
-// ---------------------------------------------------------------------------
-
-function computeWeightedScore(ranks: Record<FiiIndicatorKey, number>): number {
-  let total = 0;
-  for (const key of Object.keys(FII_WEIGHTS) as FiiIndicatorKey[]) {
-    total += ranks[key] * FII_WEIGHTS[key];
-  }
-  return total;
 }
 
 function compareByScoreThenTiebreakers(a: RankedFii, b: RankedFii): number {
-  if (a.score !== b.score) return a.score - b.score;
+  if (a.score !== b.score) return b.score - a.score; // DESC
 
   for (const { key, direction } of FII_TIEBREAKER_ORDER) {
     const av = indicatorValue(a, key);
@@ -223,26 +135,10 @@ function compareByScoreThenTiebreakers(a: RankedFii, b: RankedFii): number {
     if (aMissing && bMissing) continue;
 
     if (av === bv) continue;
-    if (direction === 'higher') {
-      return (bv as number) - (av as number);
-    }
-    return (av as number) - (bv as number);
+    return direction === 'higher' ? (bv as number) - (av as number) : (av as number) - (bv as number);
   }
 
   return a.ticker.localeCompare(b.ticker);
-}
-
-function indicatorValue(fii: ClassifiedFii, key: FiiIndicatorKey): number | null {
-  switch (key) {
-    case 'dividendYield':
-      return fii.dividendYield;
-    case 'pvp':
-      return fii.pvp;
-    case 'liquidity':
-      return fii.liquidity;
-    case 'vacancy':
-      return fii.vacancy;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -250,14 +146,10 @@ function indicatorValue(fii: ClassifiedFii, key: FiiIndicatorKey): number | null
 // ---------------------------------------------------------------------------
 
 export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
-  // 1. Classifica segmento e descarta silenciosamente os fora da lista de
-  //    segmentos elegíveis (rules_fiis.md: "Todos os outros segmentos devem
-  //    ser excluídos"). Só entram em analyzed / approved / rejected os FIIs
-  //    de Logística ou Multicategoria.
-  const classifiedAll: ClassifiedFii[] = snapshot.fiis.map(classify);
-  const candidates: ClassifiedFii[] = classifiedAll.filter((f) => f.allowedSegment);
+  // 1. Classifica e descarta segmentos não elegíveis silenciosamente
+  const candidates = snapshot.fiis.map(classify).filter((f) => f.allowedSegment);
 
-  // 2 + 3. Filtros
+  // 2+3. Filtros
   const approved: ClassifiedFii[] = [];
   const rejected: RejectedFii[] = [];
   for (const f of candidates) {
@@ -266,69 +158,86 @@ export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
     else approved.push(f);
   }
 
-  // 4. Rankings
-  const vacancyOutput = rankVacancyWithNeutralMulti(approved);
+  // 4. Scores percentis por indicador
+  const scoreMap: Partial<Record<FiiIndicatorKey, Map<string, number>>> = {};
+  const excludedSet: Partial<Record<FiiIndicatorKey, Set<string>>> = {};
 
-  const otherRanks: Partial<Record<FiiIndicatorKey, Map<string, number>>> = {};
-  const missingByIndicator: Partial<Record<FiiIndicatorKey, Set<string>>> = {};
-  const ordinalKeys: FiiIndicatorKey[] = ['dividendYield', 'pvp', 'liquidity'];
-  const directions: Record<FiiIndicatorKey, 'higher' | 'lower'> = {
-    dividendYield: 'higher',
-    pvp: 'lower',
-    liquidity: 'higher',
-    vacancy: 'lower',
-  };
-
-  for (const indicator of ordinalKeys) {
-    const ranked = rankOrdinal(
-      approved.map((f) => ({ ticker: f.ticker, value: indicatorValue(f, indicator) })),
-      directions[indicator],
+  // Vacância: coorte = somente Logística aprovados
+  {
+    const logistica = approved.filter((f) => f.normalizedSegment === 'Logística');
+    const results = computeMinMaxScore(
+      logistica.map((f) => ({ ticker: f.ticker, value: f.vacancy })),
+      'lower',
     );
-    const rankMap = new Map<string, number>();
-    const missingSet = new Set<string>();
-    for (const r of ranked) {
-      rankMap.set(r.ticker, r.rank);
-      if (r.wasMissing) missingSet.add(r.ticker);
+    const m = new Map<string, number>();
+    const ex = new Set<string>();
+    for (const r of results) {
+      if (r.wasExcluded) ex.add(r.ticker);
+      else m.set(r.ticker, r.score);
     }
-    otherRanks[indicator] = rankMap;
-    missingByIndicator[indicator] = missingSet;
+    scoreMap.vacancy = m;
+    excludedSet.vacancy = ex;
   }
 
-  // 5. Score + flags
-  const scored: RankedFii[] = approved.map((f) => {
-    const ranks: Record<FiiIndicatorKey, number> = {
-      dividendYield: otherRanks.dividendYield!.get(f.ticker)!,
-      pvp: otherRanks.pvp!.get(f.ticker)!,
-      liquidity: otherRanks.liquidity!.get(f.ticker)!,
-      vacancy: vacancyOutput.ranks.get(f.ticker)!,
-    };
+  // DY, P/VP, Liquidez: coorte = todos os aprovados
+  const cohortIndicators: Array<{ key: FiiIndicatorKey; direction: 'higher' | 'lower' }> = [
+    { key: 'dividendYield', direction: 'higher' },
+    { key: 'pvp',           direction: 'lower'  },
+    { key: 'liquidity',     direction: 'higher' },
+  ];
+  for (const { key, direction } of cohortIndicators) {
+    const results = computeMinMaxScore(
+      approved.map((f) => ({ ticker: f.ticker, value: indicatorValue(f, key) })),
+      direction,
+    );
+    const m = new Map<string, number>();
+    const ex = new Set<string>();
+    for (const r of results) {
+      if (r.wasExcluded) ex.add(r.ticker);
+      else m.set(r.ticker, r.score);
+    }
+    scoreMap[key] = m;
+    excludedSet[key] = ex;
+  }
 
+  // 5. Montar RankedFii
+  const scored: RankedFii[] = approved.map((f) => {
+    const scores: Partial<Record<FiiIndicatorKey, number>> = {};
     const flags: string[] = [];
-    if (vacancyOutput.neutralTickers.has(f.ticker)) {
-      flags.push('multicategoria — rank neutro em Vacância');
-    }
-    if (vacancyOutput.missingLogistics.has(f.ticker)) {
-      flags.push('Vacância ausente — pior rank no indicador');
-    }
-    for (const indicator of ordinalKeys) {
-      if (missingByIndicator[indicator]?.has(f.ticker)) {
-        flags.push(
-          `${FII_INDICATOR_LABELS[indicator]} ausente — pior rank no indicador`,
-        );
+
+    for (const key of ['dividendYield', 'pvp', 'liquidity'] as FiiIndicatorKey[]) {
+      const v = scoreMap[key]?.get(f.ticker);
+      if (v !== undefined) {
+        scores[key] = v;
+      } else if (excludedSet[key]?.has(f.ticker)) {
+        flags.push(`${FII_INDICATOR_LABELS[key]} ausente — excluída do cálculo`);
       }
+    }
+
+    // Vacância: somente Logística
+    if (f.normalizedSegment === 'Logística') {
+      const v = scoreMap.vacancy?.get(f.ticker);
+      if (v !== undefined) {
+        scores.vacancy = v;
+      } else if (excludedSet.vacancy?.has(f.ticker)) {
+        flags.push(`${FII_INDICATOR_LABELS.vacancy} ausente — excluída do cálculo`);
+      }
+    } else {
+      // Multicategoria: Vacância não aplicável
+      flags.push('Vacância não aplicável (Multicategoria) — excluída do cálculo');
     }
 
     return {
       ...f,
       normalizedSegment: f.normalizedSegment as FiiSegment,
-      ranks,
-      score: computeWeightedScore(ranks),
+      scores,
+      score: computeRenormalizedScore(scores, FII_WEIGHTS),
       flags,
       position: 0,
     };
   });
 
-  // 6 + 7. Ordenar e posicionar
+  // 6+7. Ordenar DESC e posicionar
   scored.sort(compareByScoreThenTiebreakers);
   scored.forEach((s, idx) => {
     s.position = idx + 1;
@@ -339,7 +248,7 @@ export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
     totalCollected: snapshot.totalCollected,
     totalAnalyzed: candidates.length,
     totalApproved: approved.length,
-    ranked: scored,
+    top10: scored.slice(0, 10),
     rejected,
   };
 }
