@@ -94,14 +94,6 @@ Se qualquer desses critérios não for atendido:
 * Qtd de imóveis não é considerada
 * Vacância Média não é considerada
 
-### Tratamento neutro
-
-Para Vacância Média:
-
-* calcular o rank médio dos FIIs logísticos válidos
-* arredondar para o inteiro mais próximo
-* atribuir ao FII multicategoria
-
 ---
 
 ## Direção dos indicadores
@@ -116,22 +108,41 @@ Para Vacância Média:
 **Observação:**
 
 * Qtd de imóveis NÃO participa do ranking
+* é apenas filtro
 
 ---
 
-## Método de ranking
+## Método de pontuação
 
-* Ranking ordinal (dense ranking)
-* Melhor valor recebe rank 1
-* Não utilizar valores contínuos diretamente
+### Conversão para percentil
 
-### Tratamento neutro
+Cada indicador deve ser convertido em uma escala de 0 a 1, considerando apenas os FIIs aprovados nos filtros:
 
-Para indicadores não aplicáveis:
+* Melhor valor do indicador → 1
+* Pior valor → 0
+* Valores intermediários → distribuídos proporcionalmente entre 0 e 1
 
-* calcular o rank médio das observações válidas
-* arredondar para o inteiro mais próximo
-* atribuir ao FII
+A direção do indicador deve ser respeitada:
+
+* Maior melhor → maior valor recebe maior percentil
+* Menor melhor → menor valor recebe maior percentil
+
+---
+
+### Exclusão limpa
+
+Quando um indicador não se aplica ao FII:
+
+* O indicador deve ser excluído do cálculo
+* Nenhum valor neutro ou artificial deve ser atribuído
+* Os pesos devem ser ajustados automaticamente considerando apenas os indicadores aplicáveis
+
+#### Aplicação prática
+
+Para FIIs multicategoria:
+
+* Vacância Média deve ser excluída do cálculo
+* Qtd de imóveis já não participa do ranking
 
 ---
 
@@ -146,23 +157,39 @@ Para indicadores não aplicáveis:
 
 ## Cálculo da pontuação
 
-Pontuação total =
+Para cada FII, o score final deve ser calculado da seguinte forma:
 
-(rank_DY × 1.5) +
-(rank_PVP × 2.0) +
-(rank_Liquidez × 1.0) +
-(rank_Vacancia × 1.5)
+1. Para cada indicador aplicável:
 
-* Menor pontuação = melhor FII
+   * calcular o percentil no intervalo de 0 a 1
+   * aplicar o peso correspondente
+
+2. Somar os valores ponderados:
+   Soma ponderada = Σ (percentil_indicador × peso_indicador)
+
+3. Somar os pesos dos indicadores utilizados:
+   Soma dos pesos = Σ (peso_indicador aplicável)
+
+4. Calcular o score final:
+   Score final = Soma ponderada / Soma dos pesos
+
+### Regras do score
+
+* O score final deve variar entre 0 e 1
+* Quanto maior o score, melhor o FII
+* Indicadores não aplicáveis não entram no cálculo
+* Os pesos são automaticamente renormalizados pela soma dos pesos utilizados
 
 ---
 
 ## Tratamento de dados
 
-* Não utilizar recalibragem dinâmica
-* Não ajustar pesos por ausência de dados
-* Indicadores não aplicáveis devem usar rank neutro
-* Caso uma coluna obrigatória não exista, o sistema deve falhar com erro explícito
+* Não utilizar ranking ordinal
+* Não utilizar rank neutro
+* Não utilizar penalidades artificiais
+* Indicadores não aplicáveis devem ser excluídos do cálculo
+* Dados inválidos devem eliminar o FII com motivo claro
+* Todos os FIIs devem permanecer comparáveis através da renormalização dos pesos
 
 ---
 
@@ -185,7 +212,11 @@ Ordem:
 * quantidade de FIIs analisados
 * quantidade aprovados
 
+---
+
 ### Ranking final
+
+A tabela principal deve exibir **apenas os 10 melhores FIIs (Top 10)**.
 
 Para cada FII:
 
@@ -197,9 +228,11 @@ Para cada FII:
 * Liquidez
 * Qtd de imóveis
 * Vacância Média
-* Rank por indicador
-* Pontuação final
+* Percentil de cada indicador
+* Score final
 * Posição
+
+---
 
 ### Reprovados
 
@@ -213,6 +246,7 @@ Para cada FII:
 * Criar aba separada para FIIs
 * Manter a aba de ações intacta
 * Utilizar mesma estrutura visual
+* A tabela principal deve ser limitada ao Top 10
 
 ---
 
