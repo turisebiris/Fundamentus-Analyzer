@@ -4,7 +4,7 @@
 
 Criar um aplicativo web para análise e ranking de ações do mercado brasileiro com base em critérios quantitativos, utilizando dados do site Fundamentus.
 
-A versão inicial contempla apenas **ações**. A arquitetura deve permitir expansão futura para FIIs.
+A versão inicial contempla apenas ações. A arquitetura deve permitir expansão futura para FIIs.
 
 ---
 
@@ -16,11 +16,11 @@ https://fundamentus.com.br/
 
 ## Requisitos gerais
 
-1. O app deve ter interface web acessível por URL
-2. Os dados devem ser atualizados **apenas manualmente** por botão “Atualizar dados”
-3. Não deve haver atualização automática
-4. Caso não seja possível hospedar, gerar projeto pronto para deploy (ex: Netlify)
-5. Scraping não deve ocorrer no frontend (devido a CORS)
+* O app deve ter interface web acessível por URL
+* Os dados devem ser atualizados apenas manualmente por botão “Atualizar dados”
+* Não deve haver atualização automática
+* Caso não seja possível hospedar, gerar projeto pronto para deploy, por exemplo Netlify
+* Scraping não deve ocorrer no frontend, devido a CORS
 
 ---
 
@@ -28,9 +28,9 @@ https://fundamentus.com.br/
 
 1. Coletar dados do Fundamentus
 2. Aplicar filtros eliminatórios
-3. Calcular ranking por indicador
+3. Calcular percentil por indicador
 4. Aplicar pesos
-5. Somar pontuação final
+5. Calcular score final
 6. Gerar ranking geral
 7. Exibir apenas as 10 melhores ações
 
@@ -42,7 +42,7 @@ A ação só permanece se atender a todos os critérios:
 
 * Dividend Yield ≥ 6%
 * P/L entre 3 e 10
-* Margem Líquida > 10% (exceto bancos)
+* Margem Líquida > 10%, exceto bancos
 * P/VP < 10
 * ROE > 12%
 * Liquidez média de 2 meses > 1.000.000
@@ -51,13 +51,11 @@ A ação só permanece se atender a todos os critérios:
 
 ## Regra especial para bancos
 
-* Bancos **não devem ser eliminados** pelo critério de Margem Líquida
-* No ranking de Margem Líquida:
-
-  * Bancos devem receber **rank médio neutro**
-  * O rank médio deve ser calculado com base nas demais empresas válidas
-* O peso da Margem Líquida deve ser mantido normalmente na pontuação final
-* O sistema deve identificar bancos corretamente via setor/subsetor
+* Bancos não devem ser eliminados pelo critério de Margem Líquida
+* Margem Líquida não deve ser usada no cálculo da pontuação para bancos
+* O sistema deve identificar bancos corretamente via setor e subsetor
+* Indicadores não aplicáveis devem ser excluídos do cálculo de forma limpa
+* O relatório deve sinalizar claramente quando um indicador foi excluído
 
 ---
 
@@ -74,11 +72,30 @@ A ação só permanece se atender a todos os critérios:
 
 ---
 
-## Método de ranking
+## Método de pontuação
 
-* Ranking **ordinal**
-* Melhor valor recebe rank 1
-* Segundo melhor rank 2, e assim por diante
+### Conversão para percentil
+
+Cada indicador deve ser convertido em uma escala de 0 a 1, considerando apenas as ações aprovadas nos filtros:
+
+* Melhor valor do indicador → 1
+* Pior valor → 0
+* Valores intermediários → distribuídos proporcionalmente entre 0 e 1
+
+A direção do indicador deve ser respeitada:
+
+* Maior melhor → maior valor recebe maior percentil
+* Menor melhor → menor valor recebe maior percentil
+
+---
+
+### Exclusão limpa
+
+Quando um indicador não se aplica a um ativo:
+
+* O indicador deve ser excluído do cálculo
+* Nenhum valor neutro ou artificial deve ser atribuído
+* Os pesos devem ser ajustados automaticamente considerando apenas os indicadores aplicáveis
 
 ---
 
@@ -95,26 +112,39 @@ A ação só permanece se atender a todos os critérios:
 
 ## Cálculo da pontuação
 
-Pontuação total =
+Para cada ação, o score final deve ser calculado da seguinte forma:
 
-(rank_ROE × 2.0) +
-(rank_MargemLiquida × 2.0) +
-(rank_PL × 1.5) +
-(rank_DY × 1.0) +
-(rank_PVP × 1.0) +
-(rank_Liquidez × 1.0)
+1. Para cada indicador aplicável:
 
-* A menor pontuação é a melhor
-* O ranking final deve ser ordenado por menor pontuação total
+   * calcular o percentil no intervalo de 0 a 1
+   * aplicar o peso correspondente
+
+2. Somar os valores ponderados:
+   Soma ponderada = Σ (percentil_indicador × peso_indicador)
+
+3. Somar os pesos dos indicadores utilizados:
+   Soma dos pesos = Σ (peso_indicador aplicável)
+
+4. Calcular o score final:
+   Score final = Soma ponderada / Soma dos pesos
+
+### Regras do score
+
+* O score final deve variar entre 0 e 1
+* Quanto maior o score, melhor a ação
+* Indicadores não aplicáveis não entram no cálculo
+* Os pesos devem ser recalculados implicitamente pela soma dos pesos utilizados
 
 ---
 
 ## Tratamento de dados
 
-* Não utilizar recalibragem dinâmica por soma de pesos
-* Todos os ativos devem permanecer comparáveis
-* Dados inválidos ou ausentes devem ser tratados de forma neutra
-* Indicadores não aplicáveis devem ser claramente sinalizados no relatório
+* Não utilizar ranking ordinal
+* Não utilizar rank neutro
+* Não utilizar penalidades artificiais
+* Dados inválidos devem eliminar o ativo com motivo claro
+* Indicadores não aplicáveis devem ser sinalizados no relatório
+* Todos os ativos devem permanecer comparáveis através da renormalização dos pesos
 
 ---
 
@@ -131,8 +161,6 @@ Ordem de desempate:
 
 ## Saída do relatório
 
-O relatório deve conter:
-
 ### Informações gerais
 
 * Data e hora da última atualização
@@ -144,16 +172,16 @@ O relatório deve conter:
 Para cada ação:
 
 * Ticker
-* Nome da empresa (se disponível)
-* Setor (se disponível)
+* Nome da empresa, se disponível
+* Setor, se disponível
 * Dividend Yield
 * P/L
 * Margem Líquida
 * P/VP
 * ROE
 * Liquidez
-* Rank de cada indicador
-* Pontuação total
+* Percentil de cada indicador
+* Score final
 * Posição final
 
 ### Ações eliminadas
@@ -183,7 +211,6 @@ O código deve ser organizado em módulos:
 * coleta de dados
 * normalização
 * filtros
-* ranking
 * pontuação
 * interface
 
@@ -206,7 +233,7 @@ O sistema deve:
 
 * funcionar localmente
 * estar pronto para deploy
-* ou ser entregue em formato pronto para hospedagem (ex: zip)
+* ou ser entregue em formato pronto para hospedagem, por exemplo zip
 
 ---
 
@@ -214,8 +241,8 @@ O sistema deve:
 
 Antes de implementar:
 
-* Apresentar plano técnico
-* Explicar arquitetura e decisões
-* Aguardar confirmação
+* apresentar plano técnico
+* explicar arquitetura e decisões
+* aguardar confirmação
 
 Somente após aprovação, iniciar implementação
