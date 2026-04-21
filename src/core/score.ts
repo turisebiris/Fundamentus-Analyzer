@@ -1,25 +1,26 @@
 /**
- * Soma ponderada dos ranks por indicador (rules.md).
+ * Pontuação ponderada renormalizada.
  *
- *   Pontuação total =
- *     (rank_ROE         × 2.0) +
- *     (rank_MargemLiq.  × 2.0) +
- *     (rank_PL          × 1.5) +
- *     (rank_DY          × 1.0) +
- *     (rank_PVP         × 1.0) +
- *     (rank_Liquidez    × 1.0)
+ * Apenas os indicadores presentes em `scores` (aplicáveis ao ativo) entram
+ * na soma. O divisor é a soma dos pesos desses indicadores — exclusão limpa
+ * de indicadores não-aplicáveis sem recalibragem dinâmica adicional.
  *
- * Pesos são FIXOS. Não há recalibragem dinâmica por soma de pesos em nenhuma
- * situação (banco, dado ausente etc.).
+ * Resultado em [0, 1]. Maior = melhor.
  */
+export function computeRenormalizedScore<K extends string>(
+  scores: Partial<Record<K, number>>,
+  weights: Record<K, number>,
+): number {
+  let weightedSum = 0;
+  let totalWeight = 0;
 
-import type { IndicatorKey } from '../shared/stocks/config.js';
-import { STOCK_WEIGHTS } from '../shared/stocks/config.js';
-
-export function computeWeightedScore(ranks: Record<IndicatorKey, number>): number {
-  let total = 0;
-  for (const key of Object.keys(STOCK_WEIGHTS) as IndicatorKey[]) {
-    total += ranks[key] * STOCK_WEIGHTS[key];
+  for (const key of Object.keys(weights) as K[]) {
+    const s = scores[key];
+    if (s !== undefined) {
+      weightedSum += weights[key] * s;
+      totalWeight += weights[key];
+    }
   }
-  return total;
+
+  return totalWeight === 0 ? 0 : weightedSum / totalWeight;
 }

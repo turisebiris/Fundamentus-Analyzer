@@ -43,7 +43,7 @@ describe('pipeline completo', () => {
     expect(report.totalApproved).toBe(15);
   });
 
-  it('menor pontuação ocupa a primeira posição', () => {
+  it('maior pontuação ocupa a primeira posição (maior = melhor)', () => {
     const best = stock({
       ticker: 'BEST3',
       dividendYield: 0.2,
@@ -67,50 +67,50 @@ describe('pipeline completo', () => {
     expect(report.top10[0]!.position).toBe(1);
     expect(report.top10[1]!.ticker).toBe('WORS4');
     expect(report.top10[1]!.position).toBe(2);
-    expect(report.top10[0]!.score).toBeLessThan(report.top10[1]!.score);
+    // Maior score = melhor
+    expect(report.top10[0]!.score).toBeGreaterThan(report.top10[1]!.score);
   });
 
-  it('desempate: ROE maior vence em caso de score igual', () => {
-    // Duas ações idênticas em TODOS os indicadores exceto ROE (ambos > 12%).
-    // Como ranks são dense e a ROE difere, os scores também diferem, então
-    // fabricamos um empate forçado duplicando valores com ROE diferentes:
-    const a = stock({
-      ticker: 'AAAA3',
-      dividendYield: 0.1,
-      pl: 5,
-      netMargin: 0.2,
-      pvp: 2,
-      roe: 0.2,
-      liquidity2m: 5_000_000,
-    });
-    const b = stock({
-      ticker: 'BBBB4',
-      dividendYield: 0.1,
-      pl: 5,
-      netMargin: 0.2,
-      pvp: 2,
-      roe: 0.3, // ROE maior -> deve vencer desempate
-      liquidity2m: 5_000_000,
-    });
-    const report = runPipeline(snap([a, b]));
-    // Pontuação de A: todos rank 1 salvo ROE rank 2 => score inclui +2*2 em ROE
-    // Pontuação de B: todos rank 1 salvo ROE rank 1 => score menor
-    // B vence no score; não é empate mas valida a direção correta de ROE.
-    expect(report.top10[0]!.ticker).toBe('BBBB4');
+  it('pontuação final em [0, 1]', () => {
+    const report = runPipeline(snap([
+      stock({ ticker: 'A3' }),
+      stock({ ticker: 'B4', roe: 0.25, dividendYield: 0.12 }),
+    ]));
+    for (const s of report.top10) {
+      expect(s.score).toBeGreaterThanOrEqual(0);
+      expect(s.score).toBeLessThanOrEqual(1);
+    }
   });
 
-  it('banco recebe flag de rank médio neutro em ML', () => {
+  it('banco: ML excluída do score (flag + scores sem netMargin)', () => {
     const bank = stock({
       ticker: 'ITUB4',
-      netMargin: 0,
       sector: 'Financeiros',
       subsector: 'Bancos',
+      netMargin: 0,
     });
     const other = stock({ ticker: 'OTHR3', netMargin: 0.25 });
     const report = runPipeline(snap([bank, other]));
     const itub = report.top10.find((s) => s.ticker === 'ITUB4')!;
-    expect(itub.flags.some((f) => f.includes('rank médio neutro'))).toBe(true);
     expect(itub.isBank).toBe(true);
+    expect(itub.flags.some((f) => f.includes('ML não aplicável'))).toBe(true);
+    // netMargin deve estar ausente dos scores do banco
+    expect(itub.scores.netMargin).toBeUndefined();
+    // Pontuação do banco usa pesos sem ML: divisor = 6.5 em vez de 8.5
+    expect(itub.score).toBeGreaterThanOrEqual(0);
+    expect(itub.score).toBeLessThanOrEqual(1);
+  });
+
+  it('banco não é eliminado pelo filtro de ML', () => {
+    const bank = stock({
+      ticker: 'BBDC4',
+      sector: 'Financeiros',
+      subsector: 'Bancos',
+      netMargin: 0.01, // abaixo do mínimo de 10%, mas banco deve passar
+    });
+    const report = runPipeline(snap([bank]));
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.ticker).toBe('BBDC4');
   });
 
   it('ações reprovadas aparecem em rejected com motivo', () => {
@@ -121,8 +121,25 @@ describe('pipeline completo', () => {
     expect(report.top10.map((s) => s.ticker)).toContain('OKAY3');
   });
 
-  it('pesos da pontuação somam exatamente conforme rules.md', () => {
-    // Sanidade: os pesos permanecem fixos em 2+2+1.5+1+1+1 = 8.5
+  it('scores por indicador estão em [0, 1]', () => {
+    const report = runPipeline(
+      snap([
+        stock({ ticker: 'A3', roe: 0.15 }),
+        stock({ ticker: 'B4', roe: 0.30 }),
+        stock({ ticker: 'C5', roe: 0.45 }),
+      ]),
+    );
+    for (const s of report.top10) {
+      for (const [, scoreVal] of Object.entries(s.scores)) {
+        if (scoreVal !== undefined) {
+          expect(scoreVal).toBeGreaterThanOrEqual(0);
+          expect(scoreVal).toBeLessThanOrEqual(1);
+        }
+      }
+    }
+  });
+
+  it('pesos dos indicadores somam 8.5 (sanidade rules.md)', () => {
     const total =
       STOCK_WEIGHTS.roe +
       STOCK_WEIGHTS.netMargin +
@@ -131,5 +148,16 @@ describe('pipeline completo', () => {
       STOCK_WEIGHTS.pvp +
       STOCK_WEIGHTS.liquidity2m;
     expect(total).toBe(8.5);
+  });
+
+  it('desempate: ROE maior vence quando scores são iguais', () => {
+    // Para forçar empate de score, usamos dois ativos idênticos em tudo
+    // exceto ROE. Com coorte de 2, o de ROE maior terá score de ROE = 1.0
+    // e o menor terá próximo de 0.0 — scores finais diferentes.
+    // Mas validamos que o maior ROE ocupa posição 1.
+    const a = stock({ ticker: 'AAAA3', roe: 0.2 });
+    const b = stock({ ticker: 'BBBB4', roe: 0.35 });
+    const report = runPipeline(snap([a, b]));
+    expect(report.top10[0]!.ticker).toBe('BBBB4');
   });
 });

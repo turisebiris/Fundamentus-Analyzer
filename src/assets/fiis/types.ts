@@ -8,9 +8,6 @@ import type { FiiIndicatorKey, FiiSegment } from './config.js';
 /**
  * Registro bruto após scraping de fii_resultado.php. Percentuais já em fração
  * decimal (7% → 0.07). Campos ausentes/inválidos aparecem como null.
- *
- * rules_fiis.md exige exatamente estas colunas: Papel, Segmento, Cotação,
- * Dividend Yield, P/VP, Liquidez, Qtd de imóveis, Vacância Média.
  */
 export interface RawFii {
   ticker: string;
@@ -35,12 +32,6 @@ export type FiiRejectionReason = {
   message: string;
 };
 
-/**
- * FII classificado por segmento. allowedSegment = true indica que o segmento
- * é Logística ou Multicategoria (rules_fiis.md). Os demais são descartados
- * silenciosamente (não entram no painel de eliminados — saem antes do
- * pipeline de ranking).
- */
 export interface ClassifiedFii extends RawFii {
   allowedSegment: boolean;
   normalizedSegment: FiiSegment | null;
@@ -48,12 +39,16 @@ export interface ClassifiedFii extends RawFii {
 
 export interface RankedFii extends ClassifiedFii {
   normalizedSegment: FiiSegment;
-  ranks: Record<FiiIndicatorKey, number>;
-  /** Pontuação ponderada total (menor = melhor). */
+  /**
+   * Score percentil por indicador, em [0, 1] (1 = melhor da coorte).
+   * Vacância ausente para Multicategoria (clean exclusion).
+   */
+  scores: Partial<Record<FiiIndicatorKey, number>>;
+  /** Pontuação final ponderada renormalizada, em [0, 1]. Maior = melhor. */
   score: number;
   /** Posição final no ranking (1 = melhor). */
   position: number;
-  /** Flags explicativas (ex.: "multicategoria — rank neutro em Vacância"). */
+  /** Flags explicativas. */
   flags: string[];
 }
 
@@ -66,6 +61,8 @@ export interface FiiReport {
   totalCollected: number;
   totalAnalyzed: number;
   totalApproved: number;
-  ranked: RankedFii[];
+  /** Top 10 FIIs aprovados (maior score = melhor). */
+  top10: RankedFii[];
+  /** Todos os FIIs de segmentos elegíveis que foram eliminados pelos filtros. */
   rejected: RejectedFii[];
 }

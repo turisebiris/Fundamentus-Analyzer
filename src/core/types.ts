@@ -36,12 +36,16 @@ export interface ClassifiedStock extends RawStock {
 }
 
 export interface RankedStock extends ClassifiedStock {
-  ranks: Record<IndicatorKey, number>;
-  /** Pontuação ponderada total (menor = melhor). */
+  /**
+   * Score percentil por indicador, em [0, 1] (1 = melhor da coorte).
+   * Indicadores não-aplicáveis (ex.: ML para bancos) estão ausentes.
+   */
+  scores: Partial<Record<IndicatorKey, number>>;
+  /** Pontuação final ponderada renormalizada, em [0, 1]. Maior = melhor. */
   score: number;
   /** Posição final no ranking (1 = melhor). */
   position: number;
-  /** Flags explicativas (ex.: "banco — rank médio neutro em ML"). */
+  /** Flags explicativas (ex.: "ML não aplicável (banco)"). */
   flags: string[];
 }
 

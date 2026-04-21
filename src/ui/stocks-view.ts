@@ -56,8 +56,9 @@ export function createStocksView(): StocksViewHandle {
       <section id="stocks-rejected-host"></section>
       <footer class="app-footer">
         <p class="muted">
-          Menor pontuação = melhor. Bancos ignoram o filtro de Margem Líquida e
-          recebem rank médio neutro no indicador.
+          Maior pontuação = melhor. Score por indicador via normalização min-max
+          com clipping P5/P95. Bancos: Margem Líquida excluída do cálculo;
+          pesos renormalizados automaticamente.
         </p>
       </footer>
     `;

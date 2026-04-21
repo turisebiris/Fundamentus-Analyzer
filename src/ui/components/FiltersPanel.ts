@@ -26,15 +26,17 @@ export function renderFiltersPanel(container: HTMLElement): void {
   `;
   details.appendChild(list);
 
-  const weights = document.createElement('div');
-  weights.className = 'panel__weights';
-  weights.innerHTML = `
-    <strong>Pesos (menor pontuação = melhor):</strong>
-    ROE ${STOCK_WEIGHTS.roe.toFixed(1)} · Margem Líquida ${STOCK_WEIGHTS.netMargin.toFixed(1)} ·
-    P/L ${STOCK_WEIGHTS.pl.toFixed(1)} · Dividend Yield ${STOCK_WEIGHTS.dividendYield.toFixed(1)} ·
-    P/VP ${STOCK_WEIGHTS.pvp.toFixed(1)} · Liquidez ${STOCK_WEIGHTS.liquidity2m.toFixed(1)}
+  const note = document.createElement('div');
+  note.className = 'panel__weights';
+  note.innerHTML = `
+    <strong>Pontuação [0–100%] — maior = melhor.</strong>
+    Score por indicador via normalização min-max (clipping P5/P95 na coorte).
+    Pesos: ROE ${STOCK_WEIGHTS.roe.toFixed(1)} · ML ${STOCK_WEIGHTS.netMargin.toFixed(1)} ·
+    P/L ${STOCK_WEIGHTS.pl.toFixed(1)} · DY ${STOCK_WEIGHTS.dividendYield.toFixed(1)} ·
+    P/VP ${STOCK_WEIGHTS.pvp.toFixed(1)} · Liquidez ${STOCK_WEIGHTS.liquidity2m.toFixed(1)}.
+    Bancos: ML excluída; pesos renormalizados automaticamente.
   `;
-  details.appendChild(weights);
+  details.appendChild(note);
 
   container.appendChild(details);
 }

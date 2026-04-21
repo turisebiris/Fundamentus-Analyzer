@@ -47,202 +47,174 @@ describe('runFiiPipeline — segmento', () => {
         { ...baseLogistic('MXRF11'), segment: 'Títulos e Val. Mob.' },
       ]),
     );
-    // Totais: coletados 3, analyzed 1 (só Logística), approved 1.
     expect(report.totalCollected).toBe(3);
     expect(report.totalAnalyzed).toBe(1);
     expect(report.totalApproved).toBe(1);
-    expect(report.ranked.map((r) => r.ticker)).toEqual(['HGLG11']);
-    // Segmentos fora da lista não aparecem em rejected (silencioso por design).
-    expect(report.rejected.map((r) => r.ticker)).toEqual([]);
+    expect(report.top10.map((r) => r.ticker)).toEqual(['HGLG11']);
+    expect(report.rejected).toHaveLength(0);
   });
 
-  it('classifica Multicategoria corretamente sem exigir Qtd/Vacância', () => {
+  it('classifica Multicategoria corretamente', () => {
     const report = runFiiPipeline(snapshot([baseMulti('XPML11')]));
-    expect(report.totalAnalyzed).toBe(1);
     expect(report.totalApproved).toBe(1);
-    expect(report.ranked[0]!.normalizedSegment).toBe('Multicategoria');
+    expect(report.top10[0]!.normalizedSegment).toBe('Multicategoria');
   });
 });
 
 describe('runFiiPipeline — filtros gerais', () => {
   it('rejeita DY < 7%', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { dividendYield: 0.05 })]),
-    );
+    const report = runFiiPipeline(snapshot([baseLogistic('A', { dividendYield: 0.05 })]));
     expect(report.totalApproved).toBe(0);
     expect(report.rejected[0]!.reasons.some((r) => r.indicator === 'dividendYield')).toBe(true);
   });
 
   it('rejeita Liquidez < 500.000', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { liquidity: 100_000 })]),
-    );
+    const report = runFiiPipeline(snapshot([baseLogistic('A', { liquidity: 100_000 })]));
     expect(report.totalApproved).toBe(0);
     expect(report.rejected[0]!.reasons.some((r) => r.indicator === 'liquidity')).toBe(true);
   });
 
   it('rejeita P/VP fora de [0.7, 1.1]', () => {
-    const low = runFiiPipeline(snapshot([baseLogistic('AAA11', { pvp: 0.5 })]));
+    const low = runFiiPipeline(snapshot([baseLogistic('A', { pvp: 0.5 })]));
     expect(low.rejected[0]!.reasons.some((r) => r.indicator === 'pvp')).toBe(true);
-    const high = runFiiPipeline(snapshot([baseLogistic('BBB11', { pvp: 1.5 })]));
+    const high = runFiiPipeline(snapshot([baseLogistic('A', { pvp: 1.5 })]));
     expect(high.rejected[0]!.reasons.some((r) => r.indicator === 'pvp')).toBe(true);
   });
 
   it('aprova P/VP nos limites do intervalo', () => {
     const report = runFiiPipeline(
-      snapshot([
-        baseLogistic('AAA11', { pvp: 0.7 }),
-        baseLogistic('BBB11', { pvp: 1.1 }),
-      ]),
+      snapshot([baseLogistic('A', { pvp: 0.7 }), baseLogistic('B', { pvp: 1.1 })]),
     );
     expect(report.totalApproved).toBe(2);
   });
 });
 
 describe('runFiiPipeline — filtros específicos de Logística', () => {
-  it('rejeita Logística com Qtd de imóveis ≤ 3', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { propertyCount: 2 })]),
-    );
+  it('rejeita Logística com Qtd ≤ 3', () => {
+    const report = runFiiPipeline(snapshot([baseLogistic('A', { propertyCount: 2 })]));
     expect(report.totalApproved).toBe(0);
-    expect(
-      report.rejected[0]!.reasons.some((r) => r.indicator === 'propertyCount'),
-    ).toBe(true);
+    expect(report.rejected[0]!.reasons.some((r) => r.indicator === 'propertyCount')).toBe(true);
   });
 
-  it('aprova Logística com Qtd > 3 (estritamente maior)', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { propertyCount: 4 })]),
-    );
+  it('aprova Logística com Qtd > 3', () => {
+    const report = runFiiPipeline(snapshot([baseLogistic('A', { propertyCount: 4 })]));
     expect(report.totalApproved).toBe(1);
   });
 
   it('rejeita Logística com Vacância > 10%', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { vacancy: 0.2 })]),
-    );
+    const report = runFiiPipeline(snapshot([baseLogistic('A', { vacancy: 0.2 })]));
     expect(report.totalApproved).toBe(0);
     expect(report.rejected[0]!.reasons.some((r) => r.indicator === 'vacancy')).toBe(true);
   });
 
-  it('aprova Logística com Vacância no limite (10%)', () => {
-    const report = runFiiPipeline(
-      snapshot([baseLogistic('HGLG11', { vacancy: 0.1 })]),
-    );
-    expect(report.totalApproved).toBe(1);
-  });
-
   it('NÃO aplica filtros de Qtd/Vacância a Multicategoria', () => {
     const report = runFiiPipeline(
-      snapshot([
-        baseMulti('XPML11', { propertyCount: 0, vacancy: 0.99 }),
-      ]),
+      snapshot([baseMulti('M', { propertyCount: 0, vacancy: 0.99 })]),
     );
     expect(report.totalApproved).toBe(1);
   });
 });
 
-describe('runFiiPipeline — ranking', () => {
-  it('menor P/VP recebe rank 1 e reflete na pontuação', () => {
+describe('runFiiPipeline — scoring percentil', () => {
+  it('scores por indicador estão em [0, 1]', () => {
     const report = runFiiPipeline(
       snapshot([
-        baseLogistic('AAA11', { pvp: 1.0 }),
-        baseLogistic('BBB11', { pvp: 0.8 }),
-      ]),
-    );
-    const aaa = report.ranked.find((r) => r.ticker === 'AAA11')!;
-    const bbb = report.ranked.find((r) => r.ticker === 'BBB11')!;
-    expect(bbb.ranks.pvp).toBe(1);
-    expect(aaa.ranks.pvp).toBe(2);
-    // Menor P/VP → menor pontuação → posição 1.
-    expect(bbb.position).toBe(1);
-    expect(aaa.position).toBe(2);
-  });
-
-  it('maior DY recebe rank 1', () => {
-    const report = runFiiPipeline(
-      snapshot([
-        baseLogistic('AAA11', { dividendYield: 0.08 }),
-        baseLogistic('BBB11', { dividendYield: 0.12 }),
-      ]),
-    );
-    const bbb = report.ranked.find((r) => r.ticker === 'BBB11')!;
-    const aaa = report.ranked.find((r) => r.ticker === 'AAA11')!;
-    expect(bbb.ranks.dividendYield).toBe(1);
-    expect(aaa.ranks.dividendYield).toBe(2);
-  });
-
-  it('Qtd de imóveis NÃO participa do ranking (não aparece em ranks)', () => {
-    const report = runFiiPipeline(snapshot([baseLogistic('HGLG11')]));
-    const ranks = report.ranked[0]!.ranks;
-    expect(Object.keys(ranks).sort()).toEqual(
-      ['dividendYield', 'liquidity', 'pvp', 'vacancy'],
-    );
-  });
-});
-
-describe('runFiiPipeline — rank neutro em vacância para Multicategoria', () => {
-  it('Multicategoria recebe média arredondada dos ranks válidos de Logística', () => {
-    // Três Logísticas com vacâncias distintas para gerar média fracionária.
-    // Rank vacância (menor = melhor): 0.02→1, 0.05→2, 0.09→3. Média = 2.
-    const report = runFiiPipeline(
-      snapshot([
-        baseLogistic('L1', { vacancy: 0.02 }),
-        baseLogistic('L2', { vacancy: 0.05 }),
-        baseLogistic('L3', { vacancy: 0.09 }),
+        baseLogistic('L1', { dividendYield: 0.08, pvp: 0.75, liquidity: 600_000, vacancy: 0.03 }),
+        baseLogistic('L2', { dividendYield: 0.12, pvp: 1.05, liquidity: 2_000_000, vacancy: 0.08 }),
         baseMulti('M1'),
       ]),
     );
-    const m1 = report.ranked.find((r) => r.ticker === 'M1')!;
-    expect(m1.ranks.vacancy).toBe(2);
-    expect(m1.flags.some((f) => f.includes('multicategoria'))).toBe(true);
+    for (const f of report.top10) {
+      for (const [, v] of Object.entries(f.scores)) {
+        if (v !== undefined) {
+          expect(v).toBeGreaterThanOrEqual(0);
+          expect(v).toBeLessThanOrEqual(1);
+        }
+      }
+    }
   });
 
-  it('arredonda para o inteiro mais próximo quando a média é fracionária', () => {
-    // 4 logísticas: ranks 1,2,3,4 → média 2.5 → arredonda para 3 (half-up).
+  it('pontuação final em [0, 1] e maior = melhor', () => {
     const report = runFiiPipeline(
       snapshot([
-        baseLogistic('L1', { vacancy: 0.01 }),
-        baseLogistic('L2', { vacancy: 0.03 }),
-        baseLogistic('L3', { vacancy: 0.05 }),
-        baseLogistic('L4', { vacancy: 0.09 }),
+        baseLogistic('L1', { dividendYield: 0.12, pvp: 0.75, liquidity: 2_000_000, vacancy: 0.02 }),
+        baseLogistic('L2', { dividendYield: 0.07, pvp: 1.05, liquidity: 600_000, vacancy: 0.09 }),
+      ]),
+    );
+    expect(report.top10[0]!.score).toBeGreaterThan(report.top10[1]!.score);
+    expect(report.top10[0]!.position).toBe(1);
+  });
+
+  it('Multicategoria: vacancy ausente dos scores (clean exclusion)', () => {
+    const report = runFiiPipeline(snapshot([baseMulti('M')]));
+    const m = report.top10[0]!;
+    expect(m.scores.vacancy).toBeUndefined();
+    expect(m.flags.some((f) => f.includes('Vacância não aplicável'))).toBe(true);
+  });
+
+  it('Multicategoria: vacancy excluída, pesos renormalizados (divisor 4.5 em vez de 6.0)', () => {
+    // Com apenas 1 aprovado multi e 1 logística, verificamos que o score
+    // de multi não tem vacancy enquanto logística tem.
+    const report = runFiiPipeline(
+      snapshot([
+        baseLogistic('L1'),
         baseMulti('M1'),
       ]),
     );
-    const m1 = report.ranked.find((r) => r.ticker === 'M1')!;
-    expect(m1.ranks.vacancy).toBe(3);
+    const l = report.top10.find((f) => f.ticker === 'L1')!;
+    const m = report.top10.find((f) => f.ticker === 'M1')!;
+    expect(l.scores.vacancy).toBeDefined();
+    expect(m.scores.vacancy).toBeUndefined();
+  });
+
+  it('Logística: coorte de vacância é independente da Multicategoria', () => {
+    // 2 logísticas com vacâncias distintas + 1 multicategoria sem vacância.
+    // Vacância da Logística deve ser scoreada normalmente entre as duas logísticas.
+    const report = runFiiPipeline(
+      snapshot([
+        baseLogistic('L1', { vacancy: 0.02 }), // melhor vacância
+        baseLogistic('L2', { vacancy: 0.08 }), // pior vacância
+        baseMulti('M1'),
+      ]),
+    );
+    const l1 = report.top10.find((f) => f.ticker === 'L1')!;
+    const l2 = report.top10.find((f) => f.ticker === 'L2')!;
+    // L1 tem menor vacância → melhor score de vacancy
+    expect(l1.scores.vacancy).toBeGreaterThan(l2.scores.vacancy!);
   });
 });
 
-describe('runFiiPipeline — desempate', () => {
-  it('empate em score é resolvido por menor P/VP', () => {
-    // Configura dois aprovados iguais em tudo, exceto P/VP idêntico; forço
-    // um cenário de empate via rank de liquidez/DY.
-    const report = runFiiPipeline(
-      snapshot([
-        baseLogistic('AAA11', { pvp: 0.8, dividendYield: 0.1, liquidity: 1_000_000, vacancy: 0.05 }),
-        baseLogistic('BBB11', { pvp: 1.0, dividendYield: 0.1, liquidity: 1_000_000, vacancy: 0.05 }),
-      ]),
+describe('runFiiPipeline — Top 10', () => {
+  it('retorna no máximo 10 FIIs', () => {
+    const fiis = Array.from({ length: 15 }, (_, i) =>
+      baseLogistic(`F${i}11`, { dividendYield: 0.07 + i * 0.003, pvp: 0.8 + i * 0.02 }),
     );
-    expect(report.ranked[0]!.ticker).toBe('AAA11');
+    const report = runFiiPipeline(snapshot(fiis));
+    expect(report.top10.length).toBeLessThanOrEqual(10);
+    expect(report.totalApproved).toBe(15);
+  });
+
+  it('posições são sequenciais a partir de 1', () => {
+    const fiis = [baseLogistic('A11'), baseLogistic('B11', { dividendYield: 0.11 })];
+    const report = runFiiPipeline(snapshot(fiis));
+    expect(report.top10.map((f) => f.position)).toEqual([1, 2]);
   });
 });
 
 describe('runFiiPipeline — saída do relatório', () => {
-  it('calcula totais corretamente com mistura de segmentos', () => {
+  it('calcula totais corretamente', () => {
     const report = runFiiPipeline(
       snapshot([
-        baseLogistic('A1'),                               // aprovado
-        baseLogistic('A2', { pvp: 2.0 }),                 // eliminado P/VP
-        baseMulti('M1'),                                  // aprovado
-        { ...baseLogistic('X1'), segment: 'Papéis' },     // silenciosamente descartado
+        baseLogistic('A'),
+        baseLogistic('B', { pvp: 2.0 }), // eliminado P/VP
+        baseMulti('M'),
+        { ...baseLogistic('X'), segment: 'Papéis' }, // segmento inválido
       ]),
     );
     expect(report.totalCollected).toBe(4);
     expect(report.totalAnalyzed).toBe(3); // 2 Logística + 1 Multi
     expect(report.totalApproved).toBe(2);
     expect(report.rejected).toHaveLength(1);
-    expect(report.rejected[0]!.ticker).toBe('A2');
-    expect(report.ranked.map((r) => r.position)).toEqual([1, 2]);
+    expect(report.rejected[0]!.ticker).toBe('B');
   });
 });

@@ -3,6 +3,7 @@
  */
 
 import type { RankedStock } from '../../core/types.js';
+import type { IndicatorKey } from '../../shared/stocks/config.js';
 import { formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
 import type { SortDirection, SortState } from '../types.js';
 
@@ -22,7 +23,8 @@ type ColumnKey =
 interface Column {
   key: ColumnKey;
   label: string;
-  rankKey?: keyof RankedStock['ranks'];
+  /** Chave de scores para exibir o badge de percentil. */
+  scoreKey?: IndicatorKey;
   get: (s: RankedStock) => string | number | null;
   format: (value: unknown) => string;
   numeric: boolean;
@@ -60,7 +62,7 @@ const COLUMNS: Column[] = [
   {
     key: 'dividendYield',
     label: 'DY',
-    rankKey: 'dividendYield',
+    scoreKey: 'dividendYield',
     get: (s) => s.dividendYield,
     format: (v) => formatPercent(v as number | null),
     numeric: true,
@@ -68,7 +70,7 @@ const COLUMNS: Column[] = [
   {
     key: 'pl',
     label: 'P/L',
-    rankKey: 'pl',
+    scoreKey: 'pl',
     get: (s) => s.pl,
     format: (v) => formatDecimal(v as number | null),
     numeric: true,
@@ -76,7 +78,7 @@ const COLUMNS: Column[] = [
   {
     key: 'netMargin',
     label: 'Margem Líq.',
-    rankKey: 'netMargin',
+    scoreKey: 'netMargin',
     get: (s) => s.netMargin,
     format: (v) => formatPercent(v as number | null),
     numeric: true,
@@ -84,7 +86,7 @@ const COLUMNS: Column[] = [
   {
     key: 'pvp',
     label: 'P/VP',
-    rankKey: 'pvp',
+    scoreKey: 'pvp',
     get: (s) => s.pvp,
     format: (v) => formatDecimal(v as number | null),
     numeric: true,
@@ -92,7 +94,7 @@ const COLUMNS: Column[] = [
   {
     key: 'roe',
     label: 'ROE',
-    rankKey: 'roe',
+    scoreKey: 'roe',
     get: (s) => s.roe,
     format: (v) => formatPercent(v as number | null),
     numeric: true,
@@ -100,7 +102,7 @@ const COLUMNS: Column[] = [
   {
     key: 'liquidity2m',
     label: 'Liquidez 2m',
-    rankKey: 'liquidity2m',
+    scoreKey: 'liquidity2m',
     get: (s) => s.liquidity2m,
     format: (v) => formatInteger(v as number | null),
     numeric: true,
@@ -109,7 +111,8 @@ const COLUMNS: Column[] = [
     key: 'score',
     label: 'Pontuação',
     get: (s) => s.score,
-    format: (v) => (typeof v === 'number' ? v.toFixed(2).replace('.', ',') : '—'),
+    format: (v) =>
+      typeof v === 'number' ? `${(v * 100).toFixed(1).replace('.', ',')}%` : '—',
     numeric: true,
   },
 ];
@@ -162,10 +165,9 @@ export function renderRankingTable(
     th.appendChild(button);
     headerRow.appendChild(th);
   }
-  // Coluna de flags (sem ordenação)
-  const thFlags = document.createElement('th');
-  thFlags.textContent = 'Observações';
-  headerRow.appendChild(thFlags);
+  const thObs = document.createElement('th');
+  thObs.textContent = 'Observações';
+  headerRow.appendChild(thObs);
 
   thead.appendChild(headerRow);
   table.appendChild(thead);
@@ -179,14 +181,16 @@ export function renderRankingTable(
       td.className = col.numeric ? 'numeric' : '';
       td.textContent = col.format(col.get(row));
 
-      if (col.rankKey) {
-        const rankValue = row.ranks[col.rankKey];
-        const rankSpan = document.createElement('span');
-        rankSpan.className = 'rank-badge';
-        rankSpan.textContent = `rank ${formatRank(rankValue)}`;
-        rankSpan.title = `Rank ordinal do indicador ${col.label}`;
-        td.appendChild(document.createTextNode(' '));
-        td.appendChild(rankSpan);
+      if (col.scoreKey) {
+        const scoreValue = row.scores[col.scoreKey];
+        if (scoreValue !== undefined) {
+          const badge = document.createElement('span');
+          badge.className = 'rank-badge';
+          badge.textContent = `${(scoreValue * 100).toFixed(1).replace('.', ',')}%`;
+          badge.title = `Percentil do indicador ${col.label} na coorte`;
+          td.appendChild(document.createTextNode(' '));
+          td.appendChild(badge);
+        }
       }
 
       tr.appendChild(td);
@@ -236,9 +240,4 @@ function compareByKey(
     result = String(av).localeCompare(String(bv), 'pt-BR');
   }
   return direction === 'asc' ? result : -result;
-}
-
-function formatRank(rank: number): string {
-  if (Number.isInteger(rank)) return String(rank);
-  return rank.toFixed(2).replace('.', ',');
 }
