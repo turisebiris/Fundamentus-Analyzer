@@ -139,6 +139,25 @@ body {
   font-size: 0.9rem;
 }
 
+.toggle-display {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.9rem;
+  font-size: 0.9rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.toggle-display:hover:not(:disabled) {
+  background: var(--chip-bg);
+  border-color: var(--accent);
+}
+.toggle-display:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .ranking, .rejected {
   width: 100%;
   border-collapse: collapse;

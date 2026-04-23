@@ -61,7 +61,9 @@ export interface FiiReport {
   totalCollected: number;
   totalAnalyzed: number;
   totalApproved: number;
-  /** Top 10 FIIs aprovados (maior score = melhor). */
+  /** Lista completa de aprovados ordenada (posição 1 = melhor). */
+  approved: RankedFii[];
+  /** Atalho para approved.slice(0, 10). Mantido para compatibilidade com a UI padrão. */
   top10: RankedFii[];
   /** Todos os FIIs de segmentos elegíveis que foram eliminados pelos filtros. */
   rejected: RejectedFii[];

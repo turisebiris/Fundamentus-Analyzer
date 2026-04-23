@@ -14,12 +14,15 @@ import { renderFiiFiltersPanel } from './components/FiiFiltersPanel.js';
 import { renderFiiRejectedPanel } from './components/FiiRejectedPanel.js';
 import type { RefreshState, SortDirection, SortState } from './types.js';
 
+type DisplayMode = 'top10' | 'all';
+
 interface FiisViewState {
   refresh: RefreshState;
   error: string | null;
   snapshot: FiiSnapshot | null;
   report: FiiReport | null;
   sort: SortState;
+  displayMode: DisplayMode;
 }
 
 export interface FiisViewHandle {
@@ -34,6 +37,7 @@ export function createFiisView(): FiisViewHandle {
     snapshot: null,
     report: null,
     sort: { key: 'position', direction: 'asc' },
+    displayMode: 'top10',
   };
 
   const initial = loadFiiSnapshot();
@@ -57,6 +61,7 @@ export function createFiisView(): FiisViewHandle {
       <section id="fiis-error-host"></section>
       <section id="fiis-summary-host"></section>
       <section id="fiis-filters-host"></section>
+      <section id="fiis-toggle-host"></section>
       <section id="fiis-ranking-host"></section>
       <section id="fiis-rejected-host"></section>
       <footer class="app-footer">
@@ -92,15 +97,24 @@ export function createFiisView(): FiisViewHandle {
     render();
   }
 
+  function handleToggleDisplay(): void {
+    state.displayMode = state.displayMode === 'top10' ? 'all' : 'top10';
+    render();
+  }
+
   function render(): void {
     if (!root) return;
     const refreshHost = root.querySelector<HTMLElement>('#fiis-refresh-host');
     const summaryHost = root.querySelector<HTMLElement>('#fiis-summary-host');
     const filtersHost = root.querySelector<HTMLElement>('#fiis-filters-host');
+    const toggleHost = root.querySelector<HTMLElement>('#fiis-toggle-host');
     const rankingHost = root.querySelector<HTMLElement>('#fiis-ranking-host');
     const rejectedHost = root.querySelector<HTMLElement>('#fiis-rejected-host');
     const errorHost = root.querySelector<HTMLElement>('#fiis-error-host');
-    if (!refreshHost || !summaryHost || !filtersHost || !rankingHost || !rejectedHost || !errorHost) {
+    if (
+      !refreshHost || !summaryHost || !filtersHost || !toggleHost ||
+      !rankingHost || !rejectedHost || !errorHost
+    ) {
       return;
     }
 
@@ -123,17 +137,38 @@ export function createFiisView(): FiisViewHandle {
     }
 
     if (state.report) {
+      const { totalAnalyzed, totalApproved, totalCollected, approved, rejected, top10 } =
+        state.report;
+      const rows = state.displayMode === 'all' ? approved : top10;
+      const exhibiting = rows.length;
+
       summaryHost.innerHTML = `
         <div class="summary">
-          <span><strong>${state.report.totalAnalyzed}</strong> FIIs analisados</span>
-          <span><strong>${state.report.totalApproved}</strong> aprovados nos filtros</span>
-          <span>Coletados do Fundamentus: <strong>${state.report.totalCollected}</strong></span>
+          <span><strong>${totalAnalyzed}</strong> FIIs analisados</span>
+          <span><strong>${totalApproved}</strong> aprovados</span>
+          <span><strong>${rejected.length}</strong> reprovados</span>
+          <span>Exibindo <strong>${exhibiting}</strong> de <strong>${totalApproved}</strong> aprovados</span>
+          <span>Coletados do Fundamentus: <strong>${totalCollected}</strong></span>
         </div>
       `;
-      renderFiiRankingTable(rankingHost, state.report.top10, state.report.totalApproved, { sort: state.sort }, handleSort);
-      renderFiiRejectedPanel(rejectedHost, state.report.rejected);
+
+      renderToggle(toggleHost, {
+        mode: state.displayMode,
+        totalApproved,
+        disabled: totalApproved <= 10,
+        onClick: handleToggleDisplay,
+      });
+
+      renderFiiRankingTable(
+        rankingHost,
+        rows,
+        { sort: state.sort, mode: state.displayMode },
+        handleSort,
+      );
+      renderFiiRejectedPanel(rejectedHost, rejected);
     } else {
       summaryHost.innerHTML = '';
+      toggleHost.innerHTML = '';
       rankingHost.innerHTML =
         '<p class="muted">Clique em “Atualizar dados” para coletar FIIs do Fundamentus.</p>';
       rejectedHost.innerHTML = '';
@@ -151,4 +186,30 @@ export function createFiisView(): FiisViewHandle {
       root = null;
     },
   };
+}
+
+interface ToggleProps {
+  mode: DisplayMode;
+  totalApproved: number;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+function renderToggle(host: HTMLElement, props: ToggleProps): void {
+  host.innerHTML = '';
+  if (props.totalApproved === 0) return;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toggle-display';
+  btn.textContent =
+    props.mode === 'top10'
+      ? `Mostrar todos os aprovados (${props.totalApproved})`
+      : 'Mostrar apenas Top 10';
+  btn.disabled = props.disabled;
+  if (props.disabled) {
+    btn.title = 'Menos de 10 aprovados — tudo já está exibido.';
+  }
+  btn.addEventListener('click', props.onClick);
+  host.appendChild(btn);
 }

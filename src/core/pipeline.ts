@@ -4,12 +4,12 @@
  * Ordem:
  *   1. Classificar bancos + aplicar filtros eliminatórios  (filters.ts)
  *   2. Calcular score percentil [0, 1] por indicador      (ranking/percentile.ts)
- *      - ML: coorte = apenas não-bancos com valor válido
+ *      - ML: coorte = apenas empresas operacionais (exclui bancos, seguradoras e holdings)
  *      - Demais: todos os aprovados com valor válido
  *   3. Pontuação final: média ponderada renormalizada      (score.ts)
- *      - Bancos: ML excluída (clean exclusion); divisor usa apenas pesos aplicáveis
+ *      - Bancos/Seguradoras/Holdings: ML excluída (clean exclusion)
  *   4. Ordenar por pontuação DESC (maior = melhor); desempate por valores brutos
- *   5. Atribuir posição; retornar Top 10 + todos os reprovados
+ *   5. Atribuir posição; retornar approved (lista completa) + top10 + reprovados
  */
 
 import type { IndicatorKey } from '../shared/stocks/config.js';
@@ -27,11 +27,14 @@ export function runPipeline(snapshot: StockSnapshot): Report {
   const indicatorScoreMap: Partial<Record<IndicatorKey, Map<string, number>>> = {};
   const indicatorExcludedSet: Partial<Record<IndicatorKey, Set<string>>> = {};
 
-  // ML: coorte = somente não-bancos (bancos não participam do cálculo de P5/P95)
+  // ML: coorte = apenas empresas onde ML é comparável (operacionais "normais").
+  // Bancos, seguradoras e holdings não participam da coorte nem recebem score.
   {
-    const nonBanks = approved.filter((s) => !s.isBank);
+    const mlEligible = approved.filter(
+      (s) => !s.isBank && !s.isInsurer && !s.isHolding,
+    );
     const results = computeMinMaxScore(
-      nonBanks.map((s) => ({ ticker: s.ticker, value: s.netMargin })),
+      mlEligible.map((s) => ({ ticker: s.ticker, value: s.netMargin })),
       'higher',
     );
     const scoreMap = new Map<string, number>();
@@ -66,8 +69,13 @@ export function runPipeline(snapshot: StockSnapshot): Report {
     const flags: string[] = [];
 
     for (const indicator of ALL_INDICATORS) {
-      // Bancos: ML não se aplica — clean exclusion, sem penalidade
-      if (indicator === 'netMargin' && s.isBank) continue;
+      // Clean exclusion de ML para bancos, seguradoras e holdings
+      if (
+        indicator === 'netMargin' &&
+        (s.isBank || s.isInsurer || s.isHolding)
+      ) {
+        continue;
+      }
 
       const v = indicatorScoreMap[indicator]?.get(s.ticker);
       if (v !== undefined) {
@@ -80,6 +88,10 @@ export function runPipeline(snapshot: StockSnapshot): Report {
 
     if (s.isBank) {
       flags.push('ML não aplicável (banco) — excluída do cálculo');
+    } else if (s.isInsurer) {
+      flags.push('ML não aplicável (seguradora) — excluída do cálculo');
+    } else if (s.isHolding) {
+      flags.push('ML não aplicável (holding) — excluída do cálculo');
     }
 
     return {
@@ -102,6 +114,7 @@ export function runPipeline(snapshot: StockSnapshot): Report {
     totalCollected: snapshot.totalCollected,
     totalAnalyzed: snapshot.stocks.length,
     totalApproved: approved.length,
+    approved: scored,
     top10: scored.slice(0, 10),
     rejected,
   };

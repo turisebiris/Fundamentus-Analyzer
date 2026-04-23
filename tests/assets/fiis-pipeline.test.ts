@@ -185,13 +185,18 @@ describe('runFiiPipeline — scoring percentil', () => {
 });
 
 describe('runFiiPipeline — Top 10', () => {
-  it('retorna no máximo 10 FIIs', () => {
+  it('retorna no máximo 10 FIIs e expõe lista completa de aprovados', () => {
     const fiis = Array.from({ length: 15 }, (_, i) =>
       baseLogistic(`F${i}11`, { dividendYield: 0.07 + i * 0.003, pvp: 0.8 + i * 0.02 }),
     );
     const report = runFiiPipeline(snapshot(fiis));
     expect(report.top10.length).toBeLessThanOrEqual(10);
+    expect(report.approved).toHaveLength(15);
     expect(report.totalApproved).toBe(15);
+    // Top 10 é um prefixo de approved (mesma ordenação)
+    expect(report.top10.map((f) => f.ticker)).toEqual(
+      report.approved.slice(0, 10).map((f) => f.ticker),
+    );
   });
 
   it('posições são sequenciais a partir de 1', () => {

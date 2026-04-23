@@ -119,6 +119,8 @@ const COLUMNS: Column[] = [
 
 export interface RankingTableState {
   sort: SortState;
+  /** 'top10' mostra "Top 10 ações aprovadas"; 'all' mostra "Todas as ações aprovadas (N)". */
+  mode?: 'top10' | 'all';
 }
 
 export function renderRankingTable(
@@ -130,7 +132,10 @@ export function renderRankingTable(
   container.innerHTML = '';
 
   const heading = document.createElement('h2');
-  heading.textContent = 'Top 10 ações aprovadas';
+  heading.textContent =
+    state.mode === 'all'
+      ? `Todas as ações aprovadas (${rows.length})`
+      : 'Top 10 ações aprovadas';
   container.appendChild(heading);
 
   if (rows.length === 0) {
