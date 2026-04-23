@@ -108,27 +108,24 @@ const COLUMNS: Column[] = [
 
 export interface FiiRankingTableState {
   sort: SortState;
+  /** 'top10' mostra "Top 10 FIIs aprovados"; 'all' mostra "Todos os FIIs aprovados (N)". */
+  mode?: 'top10' | 'all';
 }
 
 export function renderFiiRankingTable(
   container: HTMLElement,
   rows: RankedFii[],
-  totalApproved: number,
   state: FiiRankingTableState,
   onSort: (key: string, direction: SortDirection) => void,
 ): void {
   container.innerHTML = '';
 
   const heading = document.createElement('h2');
-  heading.textContent = 'Top 10 FIIs aprovados';
+  heading.textContent =
+    state.mode === 'all'
+      ? `Todos os FIIs aprovados (${rows.length})`
+      : 'Top 10 FIIs aprovados';
   container.appendChild(heading);
-
-  if (totalApproved > rows.length) {
-    const sub = document.createElement('p');
-    sub.className = 'muted';
-    sub.textContent = `Exibindo ${rows.length} de ${totalApproved} aprovados.`;
-    container.appendChild(sub);
-  }
 
   if (rows.length === 0) {
     const empty = document.createElement('p');

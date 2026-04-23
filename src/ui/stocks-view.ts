@@ -14,12 +14,16 @@ import { renderFiltersPanel } from './components/FiltersPanel.js';
 import { renderRejectedPanel } from './components/RejectedPanel.js';
 import type { RefreshState, SortDirection, SortState } from './types.js';
 
+type DisplayMode = 'top10' | 'all';
+
 interface StocksViewState {
   refresh: RefreshState;
   error: string | null;
   snapshot: StockSnapshot | null;
   report: Report | null;
   sort: SortState;
+  /** Top 10 por padrão; 'all' mostra a lista completa de aprovados. */
+  displayMode: DisplayMode;
 }
 
 export interface StocksViewHandle {
@@ -34,6 +38,7 @@ export function createStocksView(): StocksViewHandle {
     snapshot: null,
     report: null,
     sort: { key: 'position', direction: 'asc' },
+    displayMode: 'top10',
   };
 
   const initial = loadSnapshot();
@@ -52,13 +57,14 @@ export function createStocksView(): StocksViewHandle {
       <section id="stocks-error-host"></section>
       <section id="stocks-summary-host"></section>
       <section id="stocks-filters-host"></section>
+      <section id="stocks-toggle-host"></section>
       <section id="stocks-ranking-host"></section>
       <section id="stocks-rejected-host"></section>
       <footer class="app-footer">
         <p class="muted">
           Maior pontuação = melhor. Score por indicador via normalização min-max
-          com clipping P5/P95. Bancos: Margem Líquida excluída do cálculo;
-          pesos renormalizados automaticamente.
+          com clipping P5/P95. Bancos, seguradoras e holdings: Margem Líquida
+          excluída do cálculo; pesos renormalizados automaticamente.
         </p>
       </footer>
     `;
@@ -87,15 +93,24 @@ export function createStocksView(): StocksViewHandle {
     render();
   }
 
+  function handleToggleDisplay(): void {
+    state.displayMode = state.displayMode === 'top10' ? 'all' : 'top10';
+    render();
+  }
+
   function render(): void {
     if (!root) return;
     const refreshHost = root.querySelector<HTMLElement>('#stocks-refresh-host');
     const summaryHost = root.querySelector<HTMLElement>('#stocks-summary-host');
     const filtersHost = root.querySelector<HTMLElement>('#stocks-filters-host');
+    const toggleHost = root.querySelector<HTMLElement>('#stocks-toggle-host');
     const rankingHost = root.querySelector<HTMLElement>('#stocks-ranking-host');
     const rejectedHost = root.querySelector<HTMLElement>('#stocks-rejected-host');
     const errorHost = root.querySelector<HTMLElement>('#stocks-error-host');
-    if (!refreshHost || !summaryHost || !filtersHost || !rankingHost || !rejectedHost || !errorHost) {
+    if (
+      !refreshHost || !summaryHost || !filtersHost || !toggleHost ||
+      !rankingHost || !rejectedHost || !errorHost
+    ) {
       return;
     }
 
@@ -118,17 +133,38 @@ export function createStocksView(): StocksViewHandle {
     }
 
     if (state.report) {
+      const { totalAnalyzed, totalApproved, totalCollected, approved, rejected, top10 } =
+        state.report;
+      const rows = state.displayMode === 'all' ? approved : top10;
+      const exhibiting = rows.length;
+
       summaryHost.innerHTML = `
         <div class="summary">
-          <span><strong>${state.report.totalAnalyzed}</strong> ações analisadas</span>
-          <span><strong>${state.report.totalApproved}</strong> aprovadas nos filtros</span>
-          <span>Coletadas do Fundamentus: <strong>${state.report.totalCollected}</strong></span>
+          <span><strong>${totalAnalyzed}</strong> ações analisadas</span>
+          <span><strong>${totalApproved}</strong> aprovadas</span>
+          <span><strong>${rejected.length}</strong> reprovadas</span>
+          <span>Exibindo <strong>${exhibiting}</strong> de <strong>${totalApproved}</strong> aprovadas</span>
+          <span>Coletadas do Fundamentus: <strong>${totalCollected}</strong></span>
         </div>
       `;
-      renderRankingTable(rankingHost, state.report.top10, { sort: state.sort }, handleSort);
-      renderRejectedPanel(rejectedHost, state.report.rejected);
+
+      renderToggle(toggleHost, {
+        mode: state.displayMode,
+        totalApproved,
+        disabled: totalApproved <= 10,
+        onClick: handleToggleDisplay,
+      });
+
+      renderRankingTable(
+        rankingHost,
+        rows,
+        { sort: state.sort, mode: state.displayMode },
+        handleSort,
+      );
+      renderRejectedPanel(rejectedHost, rejected);
     } else {
       summaryHost.innerHTML = '';
+      toggleHost.innerHTML = '';
       rankingHost.innerHTML =
         '<p class="muted">Clique em “Atualizar dados” para coletar do Fundamentus.</p>';
       rejectedHost.innerHTML = '';
@@ -146,4 +182,30 @@ export function createStocksView(): StocksViewHandle {
       root = null;
     },
   };
+}
+
+interface ToggleProps {
+  mode: DisplayMode;
+  totalApproved: number;
+  disabled: boolean;
+  onClick: () => void;
+}
+
+function renderToggle(host: HTMLElement, props: ToggleProps): void {
+  host.innerHTML = '';
+  if (props.totalApproved === 0) return;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toggle-display';
+  btn.textContent =
+    props.mode === 'top10'
+      ? `Mostrar todos os aprovados (${props.totalApproved})`
+      : 'Mostrar apenas Top 10';
+  btn.disabled = props.disabled;
+  if (props.disabled) {
+    btn.title = 'Menos de 10 aprovados — tudo já está exibido.';
+  }
+  btn.addEventListener('click', props.onClick);
+  host.appendChild(btn);
 }

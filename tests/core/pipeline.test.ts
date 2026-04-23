@@ -29,7 +29,7 @@ function snap(stocks: RawStock[]): StockSnapshot {
 }
 
 describe('pipeline completo', () => {
-  it('limita a saída ao Top 10', () => {
+  it('limita a saída ao Top 10 e expõe lista completa de aprovados', () => {
     const stocks: RawStock[] = Array.from({ length: 15 }, (_, i) =>
       stock({
         ticker: `A${String(i).padStart(2, '0')}`,
@@ -40,7 +40,12 @@ describe('pipeline completo', () => {
     );
     const report = runPipeline(snap(stocks));
     expect(report.top10).toHaveLength(10);
+    expect(report.approved).toHaveLength(15);
     expect(report.totalApproved).toBe(15);
+    // Top 10 é um prefixo do approved (mesma ordenação)
+    expect(report.top10.map((s) => s.ticker)).toEqual(
+      report.approved.slice(0, 10).map((s) => s.ticker),
+    );
   });
 
   it('maior pontuação ocupa a primeira posição (maior = melhor)', () => {
@@ -111,6 +116,72 @@ describe('pipeline completo', () => {
     const report = runPipeline(snap([bank]));
     expect(report.totalApproved).toBe(1);
     expect(report.top10[0]!.ticker).toBe('BBDC4');
+  });
+
+  it('seguradora: ML excluída do score e não eliminada pelo filtro de ML', () => {
+    const insurer = stock({
+      ticker: 'BBSE3',
+      sector: 'Financeiros',
+      subsector: 'Previdência e Seguros',
+      netMargin: 0.02, // ML abaixo do filtro, mas seguradora deve passar
+    });
+    const report = runPipeline(snap([insurer]));
+    expect(report.totalApproved).toBe(1);
+    const bbse = report.top10[0]!;
+    expect(bbse.isInsurer).toBe(true);
+    expect(bbse.scores.netMargin).toBeUndefined();
+    expect(bbse.flags.some((f) => f.includes('seguradora'))).toBe(true);
+  });
+
+  it('holding: ML excluída do score e não eliminada pelo filtro de ML', () => {
+    const holding = stock({
+      ticker: 'ITSA4',
+      sector: 'Outros',
+      subsector: 'Holdings Diversificadas',
+      netMargin: 0.03, // ML abaixo do filtro, mas holding deve passar
+    });
+    const report = runPipeline(snap([holding]));
+    expect(report.totalApproved).toBe(1);
+    const itsa = report.top10[0]!;
+    expect(itsa.isHolding).toBe(true);
+    expect(itsa.scores.netMargin).toBeUndefined();
+    expect(itsa.flags.some((f) => f.includes('holding'))).toBe(true);
+  });
+
+  it('coorte de ML exclui banco/seguradora/holding; só operacionais participam', () => {
+    // 4 ativos: 1 banco, 1 seguradora, 1 holding e 1 operacional.
+    // Como só a operacional entra na coorte de ML e P5==P95==seu próprio valor,
+    // o score de ML dela deve ser 1.0. Nenhuma das outras três tem scores.netMargin.
+    const bank = stock({
+      ticker: 'ITUB4',
+      sector: 'Financeiros',
+      subsector: 'Bancos',
+      netMargin: 0.05,
+    });
+    const insurer = stock({
+      ticker: 'BBSE3',
+      sector: 'Financeiros',
+      subsector: 'Previdência e Seguros',
+      netMargin: 0.07,
+    });
+    const holding = stock({
+      ticker: 'ITSA4',
+      sector: 'Outros',
+      subsector: 'Holdings Diversificadas',
+      netMargin: 0.09,
+    });
+    const operational = stock({
+      ticker: 'PETR4',
+      sector: 'Petróleo',
+      subsector: 'Exploração e Refino',
+      netMargin: 0.25,
+    });
+    const report = runPipeline(snap([bank, insurer, holding, operational]));
+    const petr = report.top10.find((s) => s.ticker === 'PETR4')!;
+    expect(petr.scores.netMargin).toBe(1.0);
+    expect(report.top10.find((s) => s.ticker === 'ITUB4')!.scores.netMargin).toBeUndefined();
+    expect(report.top10.find((s) => s.ticker === 'BBSE3')!.scores.netMargin).toBeUndefined();
+    expect(report.top10.find((s) => s.ticker === 'ITSA4')!.scores.netMargin).toBeUndefined();
   });
 
   it('ações reprovadas aparecem em rejected com motivo', () => {

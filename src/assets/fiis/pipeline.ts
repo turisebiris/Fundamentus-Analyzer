@@ -248,6 +248,7 @@ export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
     totalCollected: snapshot.totalCollected,
     totalAnalyzed: candidates.length,
     totalApproved: approved.length,
+    approved: scored,
     top10: scored.slice(0, 10),
     rejected,
   };

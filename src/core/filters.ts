@@ -10,7 +10,7 @@
 
 import type { RawStock, ClassifiedStock, RejectedStock, RejectionReason } from './types.js';
 import { STOCK_FILTERS, INDICATOR_LABELS } from '../shared/stocks/config.js';
-import { isBank } from '../utils/bank-detect.js';
+import { classifyCompanyType } from '../utils/company-type.js';
 
 export interface FilterOutcome {
   approved: ClassifiedStock[];
@@ -24,7 +24,7 @@ export function classifyAndFilter(stocks: RawStock[]): FilterOutcome {
   for (const raw of stocks) {
     const classified: ClassifiedStock = {
       ...raw,
-      isBank: isBank({ sector: raw.sector, subsector: raw.subsector }),
+      ...classifyCompanyType({ sector: raw.sector, subsector: raw.subsector }),
     };
 
     const reasons = collectRejections(classified);
@@ -61,16 +61,19 @@ function collectRejections(stock: ClassifiedStock): RejectionReason[] {
     });
   }
 
-  // Margem Líquida > 10%  (exceto bancos — identificados ANTES deste filtro).
+  // Margem Líquida > 10%  (exceto bancos, seguradoras e holdings — clean
+  // exclusion: ML não é comparável para esses tipos, então nem o filtro nem
+  // o scoring aplicam).
   //
   // Só aplicamos o filtro quando o papel foi enriquecido com setor/subsetor.
   // Papéis não-enriquecidos são aqueles já excluídos pelo pré-filtro
   // server-side por OUTRO critério (DY, P/L, P/VP, ROE ou Liquidez); sem
-  // setor, não dá para confirmar se é banco. Nesse caso, suprimir o motivo
+  // setor, não dá para confirmar tipo de empresa. Nesse caso, suprimir o motivo
   // de ML evita ruído indevido no painel de eliminados sem alterar o núcleo
   // do ranking (o papel já foi eliminado pelo motivo real).
   const enriched = stock.sector !== null || stock.subsector !== null;
-  if (!stock.isBank && enriched) {
+  const mlApplies = !stock.isBank && !stock.isInsurer && !stock.isHolding;
+  if (mlApplies && enriched) {
     if (stock.netMargin === null) {
       reasons.push(missingReason('netMargin'));
     } else if (stock.netMargin <= STOCK_FILTERS.netMargin.min) {

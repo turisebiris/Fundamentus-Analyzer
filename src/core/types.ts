@@ -33,6 +33,8 @@ export type RejectionReason = {
 
 export interface ClassifiedStock extends RawStock {
   isBank: boolean;
+  isInsurer: boolean;
+  isHolding: boolean;
 }
 
 export interface RankedStock extends ClassifiedStock {
@@ -58,6 +60,9 @@ export interface Report {
   totalCollected: number;
   totalAnalyzed: number;
   totalApproved: number;
+  /** Lista completa de aprovados ordenada (posição 1 = melhor). */
+  approved: RankedStock[];
+  /** Atalho para approved.slice(0, 10). Mantido para compatibilidade com a UI padrão. */
   top10: RankedStock[];
   rejected: RejectedStock[];
 }
