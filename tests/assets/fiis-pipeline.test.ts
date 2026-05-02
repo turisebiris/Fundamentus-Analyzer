@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { runFiiPipeline } from '../../src/assets/fiis/pipeline.js';
+import { FII_FILTERS } from '../../src/assets/fiis/config.js';
 import type { FiiSnapshot, RawFii } from '../../src/assets/fiis/types.js';
 
 function snapshot(fiis: RawFii[]): FiiSnapshot {
@@ -221,5 +222,60 @@ describe('runFiiPipeline — saída do relatório', () => {
     expect(report.totalApproved).toBe(2);
     expect(report.rejected).toHaveLength(1);
     expect(report.rejected[0]!.ticker).toBe('B');
+  });
+});
+
+describe('runFiiPipeline — filtros customizados', () => {
+  it('respeita default quando filters não é informado', () => {
+    const a = baseLogistic('A');
+    const reportDefault = runFiiPipeline(snapshot([a]));
+    const reportExplicit = runFiiPipeline(snapshot([a]), FII_FILTERS);
+    expect(reportDefault.totalApproved).toBe(reportExplicit.totalApproved);
+  });
+
+  it('DY mínimo customizado rejeita FIIs abaixo do novo threshold', () => {
+    const a = baseLogistic('A', { dividendYield: 0.08 });
+    const b = baseLogistic('B', { dividendYield: 0.12 });
+    const report = runFiiPipeline(snapshot([a, b]), {
+      ...FII_FILTERS,
+      dividendYield: { min: 0.10 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.ticker).toBe('B');
+  });
+
+  it('vacância máxima customizada rejeita Logística com vacância acima', () => {
+    const a = baseLogistic('A', { vacancy: 0.04 });
+    const b = baseLogistic('B', { vacancy: 0.08 });
+    const report = runFiiPipeline(snapshot([a, b]), {
+      ...FII_FILTERS,
+      vacancy: { max: 0.05 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.ticker).toBe('A');
+  });
+
+  it('Multicategoria continua sem score de vacância sob filtros customizados', () => {
+    const m = baseMulti('M');
+    const report = runFiiPipeline(snapshot([m]), {
+      ...FII_FILTERS,
+      vacancy: { max: 0.02 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.scores.vacancy).toBeUndefined();
+  });
+
+  it('coorte de percentil reflete filtros customizados (recálculo correto)', () => {
+    const a = baseLogistic('A', { pvp: 0.85 });
+    const b = baseLogistic('B', { pvp: 0.95 });
+    const c = baseLogistic('C', { pvp: 1.05 });
+    // Restringir P/VP para [0.8, 0.9] mantém só A.
+    const tight = runFiiPipeline(snapshot([a, b, c]), {
+      ...FII_FILTERS,
+      pvp: { min: 0.8, max: 0.9 },
+    });
+    expect(tight.totalApproved).toBe(1);
+    expect(tight.top10[0]!.ticker).toBe('A');
+    expect(tight.top10[0]!.scores.pvp).toBe(1.0);
   });
 });

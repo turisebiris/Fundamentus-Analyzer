@@ -21,7 +21,19 @@ export const FII_ALLOWED_SEGMENTS = ['Logística', 'Multicategoria'] as const;
 export type FiiSegment = (typeof FII_ALLOWED_SEGMENTS)[number];
 
 /**
- * Filtros eliminatórios gerais (rules_fiis.md):
+ * Shape mutável dos filtros de FIIs. O pipeline aceita qualquer
+ * `FiiFilterConfig` e usa `FII_FILTERS` como default.
+ */
+export interface FiiFilterConfig {
+  dividendYield: { min: number };
+  liquidity: { min: number };
+  pvp: { min: number; max: number };
+  propertyCount: { min: number };
+  vacancy: { max: number };
+}
+
+/**
+ * Filtros eliminatórios padrão (rules_fiis.md):
  *   - Dividend Yield ≥ 7%
  *   - Liquidez ≥ 500.000
  *   - P/VP entre 0.7 e 1.1 (inclusivo)
@@ -32,13 +44,13 @@ export type FiiSegment = (typeof FII_ALLOWED_SEGMENTS)[number];
  *
  * Multicategoria NÃO usa Qtd de imóveis nem Vacância Média como filtro.
  */
-export const FII_FILTERS = {
+export const FII_FILTERS: FiiFilterConfig = {
   dividendYield: { min: 0.07 },
   liquidity: { min: 500_000 },
   pvp: { min: 0.7, max: 1.1 },
   propertyCount: { min: 3 }, // somente Logística, regra: > 3
   vacancy: { max: 0.1 }, // somente Logística, regra: ≤ 10%
-} as const;
+};
 
 /**
  * Pesos dos indicadores na pontuação final (rules_fiis.md). FIXOS.

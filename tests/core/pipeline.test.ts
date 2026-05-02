@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { runPipeline } from '../../src/core/pipeline.js';
 import type { RawStock, StockSnapshot } from '../../src/core/types.js';
-import { STOCK_WEIGHTS } from '../../src/shared/stocks/config.js';
+import { STOCK_WEIGHTS, STOCK_FILTERS } from '../../src/shared/stocks/config.js';
 
 function stock(over: Partial<RawStock>): RawStock {
   return {
@@ -230,5 +230,71 @@ describe('pipeline completo', () => {
     const b = stock({ ticker: 'BBBB4', roe: 0.35 });
     const report = runPipeline(snap([a, b]));
     expect(report.top10[0]!.ticker).toBe('BBBB4');
+  });
+});
+
+describe('runPipeline — filtros customizados', () => {
+  it('respeita default quando filters não é informado', () => {
+    const baseline = stock({ ticker: 'BASE3', dividendYield: 0.07 });
+    const reportDefault = runPipeline(snap([baseline]));
+    const reportExplicit = runPipeline(snap([baseline]), STOCK_FILTERS);
+    expect(reportDefault.totalApproved).toBe(reportExplicit.totalApproved);
+  });
+
+  it('DY mínimo customizado rejeita ações abaixo do novo threshold', () => {
+    const a = stock({ ticker: 'A3', dividendYield: 0.07 });
+    const b = stock({ ticker: 'B4', dividendYield: 0.12 });
+    const report = runPipeline(snap([a, b]), {
+      ...STOCK_FILTERS,
+      dividendYield: { min: 0.10 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.ticker).toBe('B4');
+    expect(report.rejected.map((r) => r.ticker)).toContain('A3');
+  });
+
+  it('P/L customizado restringe faixa', () => {
+    const inRange = stock({ ticker: 'IN3', pl: 6 });
+    const tooLow = stock({ ticker: 'LOW3', pl: 4 });
+    const tooHigh = stock({ ticker: 'HIGH3', pl: 9 });
+    const report = runPipeline(snap([inRange, tooLow, tooHigh]), {
+      ...STOCK_FILTERS,
+      pl: { min: 5, max: 8 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.ticker).toBe('IN3');
+  });
+
+  it('coorte de percentil reflete filtros customizados (recálculo correto)', () => {
+    // Com filtro padrão (DY ≥ 6%), 3 ações entram na coorte; com DY ≥ 10%,
+    // só 1 entra. P5/P95 muda → score de DY do sobrevivente vira 1.0.
+    const a = stock({ ticker: 'A3', dividendYield: 0.07 });
+    const b = stock({ ticker: 'B4', dividendYield: 0.09 });
+    const c = stock({ ticker: 'C5', dividendYield: 0.15 });
+
+    const tight = runPipeline(snap([a, b, c]), {
+      ...STOCK_FILTERS,
+      dividendYield: { min: 0.10 },
+    });
+    expect(tight.totalApproved).toBe(1);
+    const survivor = tight.top10[0]!;
+    expect(survivor.ticker).toBe('C5');
+    // Coorte de 1 → P5 == P95 → score = 1.0 conforme convenção do percentile.ts.
+    expect(survivor.scores.dividendYield).toBe(1.0);
+  });
+
+  it('clean exclusion de ML para banco continua respeitada com filtros customizados', () => {
+    const bank = stock({
+      ticker: 'ITUB4',
+      sector: 'Financeiros',
+      subsector: 'Bancos',
+      netMargin: 0.01,
+    });
+    const report = runPipeline(snap([bank]), {
+      ...STOCK_FILTERS,
+      netMargin: { min: 0.5 },
+    });
+    expect(report.totalApproved).toBe(1);
+    expect(report.top10[0]!.scores.netMargin).toBeUndefined();
   });
 });

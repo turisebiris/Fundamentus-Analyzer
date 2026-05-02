@@ -22,6 +22,7 @@ import {
   FII_TIEBREAKER_ORDER,
   FII_WEIGHTS,
   FII_ALLOWED_SEGMENTS,
+  type FiiFilterConfig,
   type FiiIndicatorKey,
   type FiiSegment,
 } from './config.js';
@@ -66,42 +67,73 @@ function classify(raw: RawFii): ClassifiedFii {
 // Filtros
 // ---------------------------------------------------------------------------
 
-function collectRejections(fii: ClassifiedFii): FiiRejectionReason[] {
+function collectRejections(
+  fii: ClassifiedFii,
+  filters: FiiFilterConfig,
+): FiiRejectionReason[] {
   const reasons: FiiRejectionReason[] = [];
 
   if (fii.dividendYield === null) {
     reasons.push(missingReason('dividendYield'));
-  } else if (fii.dividendYield < FII_FILTERS.dividendYield.min) {
-    reasons.push({ indicator: 'dividendYield', message: `${FII_INDICATOR_LABELS.dividendYield} abaixo de 7%` });
+  } else if (fii.dividendYield < filters.dividendYield.min) {
+    reasons.push({
+      indicator: 'dividendYield',
+      message: `${FII_INDICATOR_LABELS.dividendYield} abaixo de ${pct(filters.dividendYield.min)}`,
+    });
   }
 
   if (fii.liquidity === null) {
     reasons.push(missingReason('liquidity'));
-  } else if (fii.liquidity < FII_FILTERS.liquidity.min) {
-    reasons.push({ indicator: 'liquidity', message: `${FII_INDICATOR_LABELS.liquidity} abaixo de 500.000` });
+  } else if (fii.liquidity < filters.liquidity.min) {
+    reasons.push({
+      indicator: 'liquidity',
+      message: `${FII_INDICATOR_LABELS.liquidity} abaixo de ${formatInteger(filters.liquidity.min)}`,
+    });
   }
 
   if (fii.pvp === null) {
     reasons.push(missingReason('pvp'));
-  } else if (fii.pvp < FII_FILTERS.pvp.min || fii.pvp > FII_FILTERS.pvp.max) {
-    reasons.push({ indicator: 'pvp', message: `${FII_INDICATOR_LABELS.pvp} fora do intervalo 0,7 a 1,1` });
+  } else if (fii.pvp < filters.pvp.min || fii.pvp > filters.pvp.max) {
+    reasons.push({
+      indicator: 'pvp',
+      message: `${FII_INDICATOR_LABELS.pvp} fora do intervalo ${decimal(filters.pvp.min)} a ${decimal(filters.pvp.max)}`,
+    });
   }
 
   if (fii.normalizedSegment === 'Logística') {
     if (fii.propertyCount === null) {
       reasons.push({ indicator: 'propertyCount', message: 'Qtd de imóveis ausente ou inválida' });
-    } else if (fii.propertyCount <= FII_FILTERS.propertyCount.min) {
-      reasons.push({ indicator: 'propertyCount', message: 'Qtd de imóveis não supera 3' });
+    } else if (fii.propertyCount <= filters.propertyCount.min) {
+      reasons.push({
+        indicator: 'propertyCount',
+        message: `Qtd de imóveis não supera ${filters.propertyCount.min}`,
+      });
     }
 
     if (fii.vacancy === null) {
       reasons.push(missingReason('vacancy'));
-    } else if (fii.vacancy > FII_FILTERS.vacancy.max) {
-      reasons.push({ indicator: 'vacancy', message: `${FII_INDICATOR_LABELS.vacancy} acima de 10%` });
+    } else if (fii.vacancy > filters.vacancy.max) {
+      reasons.push({
+        indicator: 'vacancy',
+        message: `${FII_INDICATOR_LABELS.vacancy} acima de ${pct(filters.vacancy.max)}`,
+      });
     }
   }
 
   return reasons;
+}
+
+function pct(fraction: number): string {
+  const value = fraction * 100;
+  return Number.isInteger(value) ? `${value}%` : `${value.toFixed(1).replace('.', ',')}%`;
+}
+
+function decimal(n: number): string {
+  return n.toFixed(1).replace('.', ',');
+}
+
+function formatInteger(n: number): string {
+  return new Intl.NumberFormat('pt-BR').format(n);
 }
 
 function missingReason(indicator: FiiIndicatorKey): FiiRejectionReason {
@@ -145,7 +177,15 @@ function compareByScoreThenTiebreakers(a: RankedFii, b: RankedFii): number {
 // Pipeline
 // ---------------------------------------------------------------------------
 
-export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
+/**
+ * `filters` opcional permite recálculo em tempo real com thresholds
+ * customizados pela UI. Modelo de scoring inalterado — só muda o conjunto
+ * aprovado e, consequentemente, as coortes de percentil.
+ */
+export function runFiiPipeline(
+  snapshot: FiiSnapshot,
+  filters: FiiFilterConfig = FII_FILTERS,
+): FiiReport {
   // 1. Classifica e descarta segmentos não elegíveis silenciosamente
   const candidates = snapshot.fiis.map(classify).filter((f) => f.allowedSegment);
 
@@ -153,7 +193,7 @@ export function runFiiPipeline(snapshot: FiiSnapshot): FiiReport {
   const approved: ClassifiedFii[] = [];
   const rejected: RejectedFii[] = [];
   for (const f of candidates) {
-    const reasons = collectRejections(f);
+    const reasons = collectRejections(f, filters);
     if (reasons.length > 0) rejected.push({ ...f, reasons });
     else approved.push(f);
   }

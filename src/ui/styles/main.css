@@ -158,6 +158,92 @@ body {
   cursor: default;
 }
 
+.filters-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem 1rem;
+  padding: 0.5rem 0 0.75rem;
+}
+
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.filter-field label {
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+.filter-field input[type='number'] {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  width: 100%;
+}
+.filter-field input[type='number']:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.filter-field input[type='number'].filter-field__input--error {
+  border-color: var(--danger);
+  background: rgba(255, 107, 107, 0.08);
+}
+.filter-field__error {
+  min-height: 1em;
+  color: var(--danger);
+  font-size: 0.78rem;
+}
+.filter-field__hint {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+}
+
+.filters-form__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+.filters-form__footnote {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+  margin: 0;
+}
+
+.filter-reset {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  padding: 0.35rem 0.8rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.filter-reset:hover:not(:disabled) {
+  background: var(--chip-bg);
+  border-color: var(--accent);
+}
+.filter-reset:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.badge--modified {
+  display: inline-block;
+  background: var(--chip-bg);
+  color: var(--accent);
+  font-size: 0.72rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 3px;
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+
 .ranking, .rejected {
   width: 100%;
   border-collapse: collapse;
