@@ -4,10 +4,24 @@
  * regras próprias (config/pipeline de FIIs). NÃO reaproveita regras de ações.
  */
 
-import { fetchFiis } from '../infra/api.js';
-import { loadFiiSnapshot, saveFiiSnapshot } from '../infra/storage.js';
+import { fetchFiis, fetchFiiName } from '../infra/api.js';
+import {
+  loadFiiSnapshot,
+  saveFiiSnapshot,
+  loadFiiFilters,
+  saveFiiFilters,
+} from '../infra/storage.js';
+import {
+  loadFiiNameCache,
+  saveFiiNameCache,
+  getCachedName,
+  upsertCachedName,
+  trackInFlight,
+  type FiiNameCache,
+} from '../infra/fii-name-cache.js';
 import { runFiiPipeline } from '../assets/fiis/pipeline.js';
-import type { FiiReport, FiiSnapshot } from '../assets/fiis/types.js';
+import { FII_FILTERS, type FiiFilterConfig } from '../assets/fiis/config.js';
+import type { FiiReport, FiiSnapshot, RankedFii } from '../assets/fiis/types.js';
 import { renderRefreshButton } from './components/RefreshButton.js';
 import { renderFiiRankingTable } from './components/FiiRankingTable.js';
 import { renderFiiFiltersPanel } from './components/FiiFiltersPanel.js';
@@ -16,6 +30,8 @@ import type { RefreshState, SortDirection, SortState } from './types.js';
 
 type DisplayMode = 'top10' | 'all';
 
+const NAME_FETCH_CONCURRENCY = 4;
+
 interface FiisViewState {
   refresh: RefreshState;
   error: string | null;
@@ -23,6 +39,30 @@ interface FiisViewState {
   report: FiiReport | null;
   sort: SortState;
   displayMode: DisplayMode;
+  nameCache: FiiNameCache;
+  customFilters: FiiFilterConfig;
+  filtersModified: boolean;
+}
+
+function cloneFiiFilters(f: FiiFilterConfig): FiiFilterConfig {
+  return {
+    dividendYield: { ...f.dividendYield },
+    liquidity: { ...f.liquidity },
+    pvp: { ...f.pvp },
+    propertyCount: { ...f.propertyCount },
+    vacancy: { ...f.vacancy },
+  };
+}
+
+function isFiiFiltersModified(a: FiiFilterConfig, b: FiiFilterConfig): boolean {
+  return (
+    a.dividendYield.min !== b.dividendYield.min ||
+    a.liquidity.min !== b.liquidity.min ||
+    a.pvp.min !== b.pvp.min ||
+    a.pvp.max !== b.pvp.max ||
+    a.propertyCount.min !== b.propertyCount.min ||
+    a.vacancy.max !== b.vacancy.max
+  );
 }
 
 export interface FiisViewHandle {
@@ -31,6 +71,9 @@ export interface FiisViewHandle {
 }
 
 export function createFiisView(): FiisViewHandle {
+  const persistedFilters = loadFiiFilters();
+  const initialFilters = persistedFilters ?? cloneFiiFilters(FII_FILTERS);
+
   const state: FiisViewState = {
     refresh: 'idle',
     error: null,
@@ -38,13 +81,16 @@ export function createFiisView(): FiisViewHandle {
     report: null,
     sort: { key: 'position', direction: 'asc' },
     displayMode: 'top10',
+    nameCache: loadFiiNameCache(),
+    customFilters: initialFilters,
+    filtersModified: isFiiFiltersModified(initialFilters, FII_FILTERS),
   };
 
   const initial = loadFiiSnapshot();
   if (initial) {
     state.snapshot = initial;
     try {
-      state.report = runFiiPipeline(initial);
+      state.report = runFiiPipeline(initial, state.customFilters);
       state.refresh = 'success';
     } catch (err) {
       state.error = err instanceof Error ? err.message : String(err);
@@ -81,13 +127,97 @@ export function createFiisView(): FiisViewHandle {
     try {
       const snapshot = await fetchFiis();
       state.snapshot = snapshot;
-      state.report = runFiiPipeline(snapshot);
+      state.report = runFiiPipeline(snapshot, state.customFilters);
       state.refresh = 'success';
       saveFiiSnapshot(snapshot);
     } catch (err) {
       state.refresh = 'error';
       state.error = err instanceof Error ? err.message : String(err);
     } finally {
+      render();
+      void hydrateNames();
+    }
+  }
+
+  function handleFiltersChange(next: FiiFilterConfig): void {
+    state.customFilters = next;
+    state.filtersModified = isFiiFiltersModified(next, FII_FILTERS);
+    saveFiiFilters(next);
+    if (state.snapshot) {
+      state.report = runFiiPipeline(state.snapshot, next);
+    }
+    render();
+    // Filtros podem aprovar FIIs cujo nome ainda não foi buscado.
+    void hydrateNames();
+  }
+
+  function handleFiltersReset(): void {
+    state.customFilters = cloneFiiFilters(FII_FILTERS);
+    state.filtersModified = false;
+    saveFiiFilters(state.customFilters);
+    if (state.snapshot) {
+      state.report = runFiiPipeline(state.snapshot, state.customFilters);
+    }
+    render();
+    void hydrateNames();
+  }
+
+  /**
+   * Constrói o objeto `resolvedNames` consumido pelo `FiiRankingTable` a partir
+   * do cache. Tickers ausentes ou com `null` mostram "—" na coluna Nome.
+   */
+  function buildResolvedNames(): Record<string, string | null> {
+    const out: Record<string, string | null> = {};
+    if (!state.report) return out;
+    for (const f of state.report.approved) {
+      const cached = getCachedName(state.nameCache, f.ticker);
+      if (cached !== undefined) out[f.ticker] = cached;
+    }
+    return out;
+  }
+
+  /**
+   * Busca incrementalmente os nomes dos FIIs aprovados que ainda não estão em
+   * cache. Pool com concorrência limitada para não sobrecarregar a serverless.
+   *
+   * - Erros de rede NÃO populam o cache (re-tenta numa próxima carga).
+   * - `null` (resposta válida sem nome) é cacheado para evitar loop.
+   * - In-flight set protege contra duplicação por refreshes rápidos.
+   * - Re-render só após todas as buscas (1 render por hidratação completa
+   *   evita flicker em rede rápida; aprovados em cache já apareceram no
+   *   render anterior).
+   */
+  async function hydrateNames(): Promise<void> {
+    if (!state.report) return;
+
+    const missing: RankedFii[] = state.report.approved.filter(
+      (f) => getCachedName(state.nameCache, f.ticker) === undefined,
+    );
+    if (missing.length === 0) return;
+
+    let cursor = 0;
+    let updated = false;
+
+    const workers = Array.from(
+      { length: Math.min(NAME_FETCH_CONCURRENCY, missing.length) },
+      async () => {
+        while (cursor < missing.length) {
+          const fii = missing[cursor++]!;
+          try {
+            const name = await trackInFlight(fii.ticker, () => fetchFiiName(fii.ticker));
+            upsertCachedName(state.nameCache, fii.ticker, name);
+            updated = true;
+          } catch {
+            // Erro de rede: NÃO cachear — re-tenta na próxima carga.
+          }
+        }
+      },
+    );
+
+    await Promise.all(workers);
+
+    if (updated) {
+      saveFiiNameCache(state.nameCache);
       render();
     }
   }
@@ -124,7 +254,12 @@ export function createFiisView(): FiisViewHandle {
       onClick: handleRefresh,
     });
 
-    renderFiiFiltersPanel(filtersHost);
+    renderFiiFiltersPanel(filtersHost, {
+      current: state.customFilters,
+      modified: state.filtersModified,
+      onChange: handleFiltersChange,
+      onReset: handleFiltersReset,
+    });
 
     if (state.error) {
       errorHost.innerHTML = '';
@@ -162,7 +297,11 @@ export function createFiisView(): FiisViewHandle {
       renderFiiRankingTable(
         rankingHost,
         rows,
-        { sort: state.sort, mode: state.displayMode },
+        {
+          sort: state.sort,
+          mode: state.displayMode,
+          resolvedNames: buildResolvedNames(),
+        },
         handleSort,
       );
       renderFiiRejectedPanel(rejectedHost, rejected);
@@ -180,6 +319,9 @@ export function createFiisView(): FiisViewHandle {
       root = el;
       layout();
       render();
+      // Snapshot persistido pode ter aprovados sem nome no cache — busca
+      // incremental dispara no mount.
+      void hydrateNames();
     },
     unmount() {
       if (root) root.innerHTML = '';

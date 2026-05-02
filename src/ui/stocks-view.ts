@@ -5,9 +5,15 @@
  */
 
 import { fetchStocks } from '../infra/api.js';
-import { loadSnapshot, saveSnapshot } from '../infra/storage.js';
+import {
+  loadSnapshot,
+  saveSnapshot,
+  loadStockFilters,
+  saveStockFilters,
+} from '../infra/storage.js';
 import { runPipeline } from '../core/pipeline.js';
 import type { Report, StockSnapshot } from '../core/types.js';
+import { STOCK_FILTERS, type StockFilterConfig } from '../shared/stocks/config.js';
 import { renderRefreshButton } from './components/RefreshButton.js';
 import { renderRankingTable } from './components/RankingTable.js';
 import { renderFiltersPanel } from './components/FiltersPanel.js';
@@ -24,6 +30,31 @@ interface StocksViewState {
   sort: SortState;
   /** Top 10 por padrão; 'all' mostra a lista completa de aprovados. */
   displayMode: DisplayMode;
+  customFilters: StockFilterConfig;
+  filtersModified: boolean;
+}
+
+function cloneFilters(f: StockFilterConfig): StockFilterConfig {
+  return {
+    dividendYield: { ...f.dividendYield },
+    pl: { ...f.pl },
+    netMargin: { ...f.netMargin },
+    pvp: { ...f.pvp },
+    roe: { ...f.roe },
+    liquidity2m: { ...f.liquidity2m },
+  };
+}
+
+function isFiltersModified(a: StockFilterConfig, b: StockFilterConfig): boolean {
+  return (
+    a.dividendYield.min !== b.dividendYield.min ||
+    a.pl.min !== b.pl.min ||
+    a.pl.max !== b.pl.max ||
+    a.netMargin.min !== b.netMargin.min ||
+    a.pvp.max !== b.pvp.max ||
+    a.roe.min !== b.roe.min ||
+    a.liquidity2m.min !== b.liquidity2m.min
+  );
 }
 
 export interface StocksViewHandle {
@@ -32,6 +63,9 @@ export interface StocksViewHandle {
 }
 
 export function createStocksView(): StocksViewHandle {
+  const persistedFilters = loadStockFilters();
+  const initialFilters = persistedFilters ?? cloneFilters(STOCK_FILTERS);
+
   const state: StocksViewState = {
     refresh: 'idle',
     error: null,
@@ -39,12 +73,14 @@ export function createStocksView(): StocksViewHandle {
     report: null,
     sort: { key: 'position', direction: 'asc' },
     displayMode: 'top10',
+    customFilters: initialFilters,
+    filtersModified: isFiltersModified(initialFilters, STOCK_FILTERS),
   };
 
   const initial = loadSnapshot();
   if (initial) {
     state.snapshot = initial;
-    state.report = runPipeline(initial);
+    state.report = runPipeline(initial, state.customFilters);
     state.refresh = 'success';
   }
 
@@ -77,7 +113,7 @@ export function createStocksView(): StocksViewHandle {
     try {
       const snapshot = await fetchStocks();
       state.snapshot = snapshot;
-      state.report = runPipeline(snapshot);
+      state.report = runPipeline(snapshot, state.customFilters);
       state.refresh = 'success';
       saveSnapshot(snapshot);
     } catch (err) {
@@ -95,6 +131,26 @@ export function createStocksView(): StocksViewHandle {
 
   function handleToggleDisplay(): void {
     state.displayMode = state.displayMode === 'top10' ? 'all' : 'top10';
+    render();
+  }
+
+  function handleFiltersChange(next: StockFilterConfig): void {
+    state.customFilters = next;
+    state.filtersModified = isFiltersModified(next, STOCK_FILTERS);
+    saveStockFilters(next);
+    if (state.snapshot) {
+      state.report = runPipeline(state.snapshot, next);
+    }
+    render();
+  }
+
+  function handleFiltersReset(): void {
+    state.customFilters = cloneFilters(STOCK_FILTERS);
+    state.filtersModified = false;
+    saveStockFilters(state.customFilters);
+    if (state.snapshot) {
+      state.report = runPipeline(state.snapshot, state.customFilters);
+    }
     render();
   }
 
@@ -120,7 +176,12 @@ export function createStocksView(): StocksViewHandle {
       onClick: handleRefresh,
     });
 
-    renderFiltersPanel(filtersHost);
+    renderFiltersPanel(filtersHost, {
+      current: state.customFilters,
+      modified: state.filtersModified,
+      onChange: handleFiltersChange,
+      onReset: handleFiltersReset,
+    });
 
     if (state.error) {
       errorHost.innerHTML = '';

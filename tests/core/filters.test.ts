@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { classifyAndFilter } from '../../src/core/filters.js';
+import { STOCK_FILTERS } from '../../src/shared/stocks/config.js';
 import type { RawStock } from '../../src/core/types.js';
 
 function mkStock(overrides: Partial<RawStock>): RawStock {
@@ -118,5 +119,32 @@ describe('classifyAndFilter — regras do rules.md', () => {
     });
     const { rejected } = classifyAndFilter([enrichedBadMl]);
     expect(rejected[0]!.reasons.some((r) => r.indicator === 'netMargin')).toBe(true);
+  });
+});
+
+describe('classifyAndFilter — filtros customizados', () => {
+  it('aceita filtros customizados sem quebrar comportamento padrão', () => {
+    const s = mkStock({});
+    const a = classifyAndFilter([s]);
+    const b = classifyAndFilter([s], STOCK_FILTERS);
+    expect(a.approved.length).toBe(b.approved.length);
+  });
+
+  it('threshold customizado de DY altera resultado', () => {
+    const s = mkStock({ dividendYield: 0.07 });
+    const lenient = classifyAndFilter([s], { ...STOCK_FILTERS, dividendYield: { min: 0.06 } });
+    const strict = classifyAndFilter([s], { ...STOCK_FILTERS, dividendYield: { min: 0.10 } });
+    expect(lenient.approved).toHaveLength(1);
+    expect(strict.approved).toHaveLength(0);
+    expect(strict.rejected[0]!.reasons.some((r) => r.indicator === 'dividendYield')).toBe(true);
+  });
+
+  it('mensagem de rejeição reflete o threshold customizado', () => {
+    const s = mkStock({ dividendYield: 0.05 });
+    const { rejected } = classifyAndFilter([s], {
+      ...STOCK_FILTERS,
+      dividendYield: { min: 0.09 },
+    });
+    expect(rejected[0]!.reasons[0]!.message).toContain('9');
   });
 });

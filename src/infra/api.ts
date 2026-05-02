@@ -63,3 +63,30 @@ export async function fetchFiis(signal?: AbortSignal): Promise<FiiSnapshot> {
     fiis: data.fiis,
   };
 }
+
+interface FiiNameApiResponse {
+  ticker: string;
+  name: string | null;
+}
+
+/**
+ * Resultado distinto de "sem nome" (resposta válida com nome ausente, retorna
+ * `{ name: null }`) e "erro de rede/upstream" (lança). Apenas o primeiro caso
+ * deve ser cacheado pelo chamador — o segundo precisa ser re-tentado depois.
+ */
+export async function fetchFiiName(
+  ticker: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  const res = await fetch(`/api/fii-name?ticker=${encodeURIComponent(ticker)}`, {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
+    signal,
+  });
+  if (!res.ok) {
+    const detail = await extractErrorDetail(res);
+    throw new Error(`Falha ao buscar nome do FII ${ticker} (HTTP ${res.status})${detail}`);
+  }
+  const data = (await res.json()) as FiiNameApiResponse;
+  return data.name ?? null;
+}

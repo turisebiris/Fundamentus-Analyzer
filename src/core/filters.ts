@@ -9,7 +9,7 @@
  */
 
 import type { RawStock, ClassifiedStock, RejectedStock, RejectionReason } from './types.js';
-import { STOCK_FILTERS, INDICATOR_LABELS } from '../shared/stocks/config.js';
+import { STOCK_FILTERS, INDICATOR_LABELS, type StockFilterConfig } from '../shared/stocks/config.js';
 import { classifyCompanyType } from '../utils/company-type.js';
 
 export interface FilterOutcome {
@@ -17,7 +17,10 @@ export interface FilterOutcome {
   rejected: RejectedStock[];
 }
 
-export function classifyAndFilter(stocks: RawStock[]): FilterOutcome {
+export function classifyAndFilter(
+  stocks: RawStock[],
+  filters: StockFilterConfig = STOCK_FILTERS,
+): FilterOutcome {
   const approved: ClassifiedStock[] = [];
   const rejected: RejectedStock[] = [];
 
@@ -27,7 +30,7 @@ export function classifyAndFilter(stocks: RawStock[]): FilterOutcome {
       ...classifyCompanyType({ sector: raw.sector, subsector: raw.subsector }),
     };
 
-    const reasons = collectRejections(classified);
+    const reasons = collectRejections(classified, filters);
     if (reasons.length > 0) {
       rejected.push({ ...classified, reasons });
     } else {
@@ -38,32 +41,35 @@ export function classifyAndFilter(stocks: RawStock[]): FilterOutcome {
   return { approved, rejected };
 }
 
-function collectRejections(stock: ClassifiedStock): RejectionReason[] {
+function collectRejections(
+  stock: ClassifiedStock,
+  filters: StockFilterConfig,
+): RejectionReason[] {
   const reasons: RejectionReason[] = [];
 
-  // Dividend Yield >= 6%
+  // Dividend Yield >= mínimo configurado
   if (stock.dividendYield === null) {
     reasons.push(missingReason('dividendYield'));
-  } else if (stock.dividendYield < STOCK_FILTERS.dividendYield.min) {
+  } else if (stock.dividendYield < filters.dividendYield.min) {
     reasons.push({
       indicator: 'dividendYield',
-      message: `${INDICATOR_LABELS.dividendYield} abaixo de 6%`,
+      message: `${INDICATOR_LABELS.dividendYield} abaixo de ${pct(filters.dividendYield.min)}`,
     });
   }
 
-  // P/L entre 3 e 10 (inclusivo)
+  // P/L dentro do intervalo configurado (inclusivo)
   if (stock.pl === null) {
     reasons.push(missingReason('pl'));
-  } else if (stock.pl < STOCK_FILTERS.pl.min || stock.pl > STOCK_FILTERS.pl.max) {
+  } else if (stock.pl < filters.pl.min || stock.pl > filters.pl.max) {
     reasons.push({
       indicator: 'pl',
-      message: `${INDICATOR_LABELS.pl} fora do intervalo 3 a 10`,
+      message: `${INDICATOR_LABELS.pl} fora do intervalo ${filters.pl.min} a ${filters.pl.max}`,
     });
   }
 
-  // Margem Líquida > 10%  (exceto bancos, seguradoras e holdings — clean
-  // exclusion: ML não é comparável para esses tipos, então nem o filtro nem
-  // o scoring aplicam).
+  // Margem Líquida > mínimo configurado (exceto bancos, seguradoras e
+  // holdings — clean exclusion: ML não é comparável para esses tipos, então
+  // nem o filtro nem o scoring aplicam).
   //
   // Só aplicamos o filtro quando o papel foi enriquecido com setor/subsetor.
   // Papéis não-enriquecidos são aqueles já excluídos pelo pré-filtro
@@ -76,45 +82,54 @@ function collectRejections(stock: ClassifiedStock): RejectionReason[] {
   if (mlApplies && enriched) {
     if (stock.netMargin === null) {
       reasons.push(missingReason('netMargin'));
-    } else if (stock.netMargin <= STOCK_FILTERS.netMargin.min) {
+    } else if (stock.netMargin <= filters.netMargin.min) {
       reasons.push({
         indicator: 'netMargin',
-        message: `${INDICATOR_LABELS.netMargin} não supera 10%`,
+        message: `${INDICATOR_LABELS.netMargin} não supera ${pct(filters.netMargin.min)}`,
       });
     }
   }
 
-  // P/VP < 10
+  // P/VP < máximo configurado
   if (stock.pvp === null) {
     reasons.push(missingReason('pvp'));
-  } else if (stock.pvp >= STOCK_FILTERS.pvp.max) {
+  } else if (stock.pvp >= filters.pvp.max) {
     reasons.push({
       indicator: 'pvp',
-      message: `${INDICATOR_LABELS.pvp} igual ou acima de 10`,
+      message: `${INDICATOR_LABELS.pvp} igual ou acima de ${filters.pvp.max}`,
     });
   }
 
-  // ROE > 12%
+  // ROE > mínimo configurado
   if (stock.roe === null) {
     reasons.push(missingReason('roe'));
-  } else if (stock.roe <= STOCK_FILTERS.roe.min) {
+  } else if (stock.roe <= filters.roe.min) {
     reasons.push({
       indicator: 'roe',
-      message: `${INDICATOR_LABELS.roe} não supera 12%`,
+      message: `${INDICATOR_LABELS.roe} não supera ${pct(filters.roe.min)}`,
     });
   }
 
-  // Liquidez 2 meses > 1.000.000
+  // Liquidez 2 meses > mínimo configurado
   if (stock.liquidity2m === null) {
     reasons.push(missingReason('liquidity2m'));
-  } else if (stock.liquidity2m <= STOCK_FILTERS.liquidity2m.min) {
+  } else if (stock.liquidity2m <= filters.liquidity2m.min) {
     reasons.push({
       indicator: 'liquidity2m',
-      message: `${INDICATOR_LABELS.liquidity2m} não supera 1.000.000`,
+      message: `${INDICATOR_LABELS.liquidity2m} não supera ${formatInteger(filters.liquidity2m.min)}`,
     });
   }
 
   return reasons;
+}
+
+function pct(fraction: number): string {
+  const value = fraction * 100;
+  return Number.isInteger(value) ? `${value}%` : `${value.toFixed(1).replace('.', ',')}%`;
+}
+
+function formatInteger(n: number): string {
+  return new Intl.NumberFormat('pt-BR').format(n);
 }
 
 function missingReason(indicator: keyof typeof INDICATOR_LABELS): RejectionReason {

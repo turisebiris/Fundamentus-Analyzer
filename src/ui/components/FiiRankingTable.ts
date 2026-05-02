@@ -10,6 +10,7 @@ import type { SortDirection, SortState } from '../types.js';
 type ColumnKey =
   | 'position'
   | 'ticker'
+  | 'name'
   | 'segment'
   | 'price'
   | 'dividendYield'
@@ -23,9 +24,13 @@ interface Column {
   key: ColumnKey;
   label: string;
   scoreKey?: FiiIndicatorKey;
-  get: (f: RankedFii) => string | number | null;
+  get: (f: RankedFii, ctx: ColumnContext) => string | number | null;
   format: (value: unknown) => string;
   numeric: boolean;
+}
+
+interface ColumnContext {
+  resolvedNames?: Record<string, string | null>;
 }
 
 const COLUMNS: Column[] = [
@@ -41,6 +46,13 @@ const COLUMNS: Column[] = [
     label: 'Papel',
     get: (f) => f.ticker,
     format: (v) => String(v ?? '—'),
+    numeric: false,
+  },
+  {
+    key: 'name',
+    label: 'Nome',
+    get: (f, ctx) => ctx.resolvedNames?.[f.ticker] ?? null,
+    format: (v) => (v == null || v === '' ? '—' : String(v)),
     numeric: false,
   },
   {
@@ -110,6 +122,11 @@ export interface FiiRankingTableState {
   sort: SortState;
   /** 'top10' mostra "Top 10 FIIs aprovados"; 'all' mostra "Todos os FIIs aprovados (N)". */
   mode?: 'top10' | 'all';
+  /**
+   * Nomes resolvidos via cache do frontend (`fii-name-cache`). Tickers
+   * ausentes ou com valor `null` mostram "—" na coluna Nome.
+   */
+  resolvedNames?: Record<string, string | null>;
 }
 
 export function renderFiiRankingTable(
@@ -118,6 +135,7 @@ export function renderFiiRankingTable(
   state: FiiRankingTableState,
   onSort: (key: string, direction: SortDirection) => void,
 ): void {
+  const ctx: ColumnContext = { resolvedNames: state.resolvedNames };
   container.innerHTML = '';
 
   const heading = document.createElement('h2');
@@ -135,7 +153,9 @@ export function renderFiiRankingTable(
     return;
   }
 
-  const sorted = [...rows].sort((a, b) => compareByKey(a, b, state.sort.key, state.sort.direction));
+  const sorted = [...rows].sort((a, b) =>
+    compareByKey(a, b, state.sort.key, state.sort.direction, ctx),
+  );
 
   const table = document.createElement('table');
   table.className = 'ranking';
@@ -172,7 +192,7 @@ export function renderFiiRankingTable(
     for (const col of COLUMNS) {
       const td = document.createElement('td');
       td.className = col.numeric ? 'numeric' : '';
-      td.textContent = col.format(col.get(row));
+      td.textContent = col.format(col.get(row, ctx));
 
       if (col.scoreKey) {
         const scoreValue = row.scores[col.scoreKey];
@@ -213,11 +233,12 @@ function compareByKey(
   b: RankedFii,
   key: string,
   direction: SortDirection,
+  ctx: ColumnContext,
 ): number {
   const col = COLUMNS.find((c) => c.key === key);
   if (!col) return 0;
-  const av = col.get(a);
-  const bv = col.get(b);
+  const av = col.get(a, ctx);
+  const bv = col.get(b, ctx);
 
   const aMissing = av === null || av === '' || (typeof av === 'number' && !Number.isFinite(av));
   const bMissing = bv === null || bv === '' || (typeof bv === 'number' && !Number.isFinite(bv));

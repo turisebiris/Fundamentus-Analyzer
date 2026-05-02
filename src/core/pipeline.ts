@@ -12,16 +12,30 @@
  *   5. Atribuir posição; retornar approved (lista completa) + top10 + reprovados
  */
 
-import type { IndicatorKey } from '../shared/stocks/config.js';
-import { ALL_INDICATORS, STOCK_DIRECTIONS, STOCK_WEIGHTS } from '../shared/stocks/config.js';
+import type { IndicatorKey, StockFilterConfig } from '../shared/stocks/config.js';
+import {
+  ALL_INDICATORS,
+  STOCK_DIRECTIONS,
+  STOCK_FILTERS,
+  STOCK_WEIGHTS,
+} from '../shared/stocks/config.js';
 import { classifyAndFilter } from './filters.js';
 import { computeMinMaxScore } from './ranking/percentile.js';
 import { computeRenormalizedScore } from './score.js';
 import { compareByScoreThenTiebreakers } from './tiebreak.js';
 import type { ClassifiedStock, RankedStock, Report, StockSnapshot } from './types.js';
 
-export function runPipeline(snapshot: StockSnapshot): Report {
-  const { approved, rejected } = classifyAndFilter(snapshot.stocks);
+/**
+ * `filters` opcional permite recálculo em tempo real com thresholds
+ * customizados pela UI. O modelo de scoring (percentil min-max + clean
+ * exclusion + renormalização) é o mesmo em qualquer caso — apenas o conjunto
+ * de aprovados muda, e a coorte de percentis se ajusta automaticamente.
+ */
+export function runPipeline(
+  snapshot: StockSnapshot,
+  filters: StockFilterConfig = STOCK_FILTERS,
+): Report {
+  const { approved, rejected } = classifyAndFilter(snapshot.stocks, filters);
 
   // Scores por indicador — Map<ticker, score [0,1]>
   const indicatorScoreMap: Partial<Record<IndicatorKey, Map<string, number>>> = {};
