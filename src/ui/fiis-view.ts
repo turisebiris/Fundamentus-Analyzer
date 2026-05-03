@@ -171,7 +171,7 @@ export function createFiisView(): FiisViewHandle {
     if (!state.report) return out;
     for (const f of state.report.approved) {
       const cached = getCachedName(state.nameCache, f.ticker);
-      if (cached !== undefined) out[f.ticker] = cached;
+      if (cached) out[f.ticker] = cached;
     }
     return out;
   }
@@ -205,8 +205,10 @@ export function createFiisView(): FiisViewHandle {
           const fii = missing[cursor++]!;
           try {
             const name = await trackInFlight(fii.ticker, () => fetchFiiName(fii.ticker));
-            upsertCachedName(state.nameCache, fii.ticker, name);
-            updated = true;
+            if (name !== null) {
+              upsertCachedName(state.nameCache, fii.ticker, name);
+              updated = true;
+            }
           } catch {
             // Erro de rede: NÃO cachear — re-tenta na próxima carga.
           }
