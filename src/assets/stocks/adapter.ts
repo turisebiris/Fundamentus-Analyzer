@@ -230,7 +230,10 @@ export function parseDetalhesHtml(html: string, ticker: string): ParsedDetails {
 
   return {
     ticker: ticker.toUpperCase(),
-    companyName: find(['?Empresa', 'Empresa']),
+    // Ações usam "Empresa"; FIIs usam "Nome". A variante "?" ocorre quando
+    // o Fundamentus renderiza o label com um span de tooltip que o cheerio
+    // inclui no texto extraído.
+    companyName: find(['Nome', '?Nome', 'Empresa', '?Empresa']),
     sector: find(['?Setor', 'Setor']),
     subsector: find(['?Subsetor', 'Subsetor']),
   };
