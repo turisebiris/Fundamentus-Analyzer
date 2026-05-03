@@ -163,7 +163,19 @@ describe('parseDetalhesHtml', () => {
     `;
   }
 
-  it('extrai empresa, setor e subsetor', () => {
+  function makeFiiDetalhesHtml(nome: string): string {
+    return `
+      <html><body>
+        <table>
+          <tr><td>Papel</td><td>HGLG11</td></tr>
+          <tr><td>Nome</td><td>${nome}</td></tr>
+          <tr><td>Segmento</td><td>Logística</td></tr>
+        </table>
+      </body></html>
+    `;
+  }
+
+  it('extrai empresa, setor e subsetor (página de ação)', () => {
     const result = parseDetalhesHtml(
       makeDetalhesHtml('Empresa Teste SA', 'Financeiros', 'Bancos'),
       'ABCD3',
@@ -172,6 +184,15 @@ describe('parseDetalhesHtml', () => {
     expect(result.sector).toBe('Financeiros');
     expect(result.subsector).toBe('Bancos');
     expect(result.ticker).toBe('ABCD3');
+  });
+
+  it('extrai nome do FII via label "Nome" (página de FII)', () => {
+    const result = parseDetalhesHtml(
+      makeFiiDetalhesHtml('CSHG Logística FII'),
+      'HGLG11',
+    );
+    expect(result.companyName).toBe('CSHG Logística FII');
+    expect(result.ticker).toBe('HGLG11');
   });
 
   it('retorna null para campos ausentes', () => {
