@@ -5,6 +5,7 @@
 import type { RankedFii } from '../../assets/fiis/types.js';
 import type { FiiIndicatorKey } from '../../assets/fiis/config.js';
 import { formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
+import { normalizeFiiName } from '../../utils/fii-name-normalize.js';
 import type { SortDirection, SortState } from '../types.js';
 
 type ColumnKey =
@@ -51,8 +52,10 @@ const COLUMNS: Column[] = [
   {
     key: 'name',
     label: 'Nome',
+    // Normalização puramente visual — o cache continua armazenando o nome
+    // completo retornado pelo Fundamentus.
     get: (f, ctx) => ctx.resolvedNames?.[f.ticker] ?? null,
-    format: (v) => (v == null || v === '' ? '—' : String(v)),
+    format: (v) => (v == null || v === '' ? '—' : normalizeFiiName(String(v))),
     numeric: false,
   },
   {
