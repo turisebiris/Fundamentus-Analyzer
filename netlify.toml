@@ -20,6 +20,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/fii-name"
+  to = "/.netlify/functions/fii-name"
+  status = 200
+
+[[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
