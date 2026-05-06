@@ -28,9 +28,12 @@ interface StocksViewState {
   snapshot: StockSnapshot | null;
   report: Report | null;
   sort: SortState;
-  /** Top 10 por padrão; 'all' mostra a lista completa de aprovados. */
   displayMode: DisplayMode;
-  customFilters: StockFilterConfig;
+  /** Valores sendo editados no formulário (não aplicados ao pipeline). */
+  draftFilters: StockFilterConfig;
+  /** Filtros efetivamente aplicados ao pipeline e persistidos. */
+  activeFilters: StockFilterConfig;
+  /** activeFilters !== STOCK_FILTERS (badge "personalizados ativos"). */
   filtersModified: boolean;
 }
 
@@ -63,8 +66,8 @@ export interface StocksViewHandle {
 }
 
 export function createStocksView(): StocksViewHandle {
-  const persistedFilters = loadStockFilters();
-  const initialFilters = persistedFilters ?? cloneFilters(STOCK_FILTERS);
+  const persisted = loadStockFilters();
+  const initialFilters = persisted ?? cloneFilters(STOCK_FILTERS);
 
   const state: StocksViewState = {
     refresh: 'idle',
@@ -73,14 +76,15 @@ export function createStocksView(): StocksViewHandle {
     report: null,
     sort: { key: 'position', direction: 'asc' },
     displayMode: 'top10',
-    customFilters: initialFilters,
+    activeFilters: initialFilters,
+    draftFilters: cloneFilters(initialFilters),
     filtersModified: isFiltersModified(initialFilters, STOCK_FILTERS),
   };
 
   const initial = loadSnapshot();
   if (initial) {
     state.snapshot = initial;
-    state.report = runPipeline(initial, state.customFilters);
+    state.report = runPipeline(initial, state.activeFilters);
     state.refresh = 'success';
   }
 
@@ -113,7 +117,7 @@ export function createStocksView(): StocksViewHandle {
     try {
       const snapshot = await fetchStocks();
       state.snapshot = snapshot;
-      state.report = runPipeline(snapshot, state.customFilters);
+      state.report = runPipeline(snapshot, state.activeFilters);
       state.refresh = 'success';
       saveSnapshot(snapshot);
     } catch (err) {
@@ -134,22 +138,29 @@ export function createStocksView(): StocksViewHandle {
     render();
   }
 
-  function handleFiltersChange(next: StockFilterConfig): void {
-    state.customFilters = next;
-    state.filtersModified = isFiltersModified(next, STOCK_FILTERS);
-    saveStockFilters(next);
+  /** Chamado a cada input válido no formulário — atualiza draft, sem re-render. */
+  function handleFiltersDraftChange(next: StockFilterConfig): void {
+    state.draftFilters = next;
+  }
+
+  /** Chamado ao clicar "Aplicar filtros" ou pressionar Enter no formulário. */
+  function handleFiltersApply(): void {
+    state.activeFilters = cloneFilters(state.draftFilters);
+    state.filtersModified = isFiltersModified(state.activeFilters, STOCK_FILTERS);
+    saveStockFilters(state.activeFilters);
     if (state.snapshot) {
-      state.report = runPipeline(state.snapshot, next);
+      state.report = runPipeline(state.snapshot, state.activeFilters);
     }
     render();
   }
 
   function handleFiltersReset(): void {
-    state.customFilters = cloneFilters(STOCK_FILTERS);
+    state.activeFilters = cloneFilters(STOCK_FILTERS);
+    state.draftFilters = cloneFilters(STOCK_FILTERS);
     state.filtersModified = false;
-    saveStockFilters(state.customFilters);
+    saveStockFilters(state.activeFilters);
     if (state.snapshot) {
-      state.report = runPipeline(state.snapshot, state.customFilters);
+      state.report = runPipeline(state.snapshot, state.activeFilters);
     }
     render();
   }
@@ -177,9 +188,11 @@ export function createStocksView(): StocksViewHandle {
     });
 
     renderFiltersPanel(filtersHost, {
-      current: state.customFilters,
+      draft: state.draftFilters,
+      active: state.activeFilters,
       modified: state.filtersModified,
-      onChange: handleFiltersChange,
+      onChange: handleFiltersDraftChange,
+      onApply: handleFiltersApply,
       onReset: handleFiltersReset,
     });
 
@@ -227,7 +240,7 @@ export function createStocksView(): StocksViewHandle {
       summaryHost.innerHTML = '';
       toggleHost.innerHTML = '';
       rankingHost.innerHTML =
-        '<p class="muted">Clique em “Atualizar dados” para coletar do Fundamentus.</p>';
+        '<p class="muted">Clique em "Atualizar dados" para coletar do Fundamentus.</p>';
       rejectedHost.innerHTML = '';
     }
   }

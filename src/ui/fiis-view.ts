@@ -40,7 +40,11 @@ interface FiisViewState {
   sort: SortState;
   displayMode: DisplayMode;
   nameCache: FiiNameCache;
-  customFilters: FiiFilterConfig;
+  /** Valores sendo editados no formulário (não aplicados ao pipeline). */
+  draftFilters: FiiFilterConfig;
+  /** Filtros efetivamente aplicados ao pipeline e persistidos. */
+  activeFilters: FiiFilterConfig;
+  /** activeFilters !== FII_FILTERS (badge "personalizados ativos"). */
   filtersModified: boolean;
 }
 
@@ -82,7 +86,8 @@ export function createFiisView(): FiisViewHandle {
     sort: { key: 'position', direction: 'asc' },
     displayMode: 'top10',
     nameCache: loadFiiNameCache(),
-    customFilters: initialFilters,
+    activeFilters: initialFilters,
+    draftFilters: cloneFiiFilters(initialFilters),
     filtersModified: isFiiFiltersModified(initialFilters, FII_FILTERS),
   };
 
@@ -90,7 +95,7 @@ export function createFiisView(): FiisViewHandle {
   if (initial) {
     state.snapshot = initial;
     try {
-      state.report = runFiiPipeline(initial, state.customFilters);
+      state.report = runFiiPipeline(initial, state.activeFilters);
       state.refresh = 'success';
     } catch (err) {
       state.error = err instanceof Error ? err.message : String(err);
@@ -127,7 +132,7 @@ export function createFiisView(): FiisViewHandle {
     try {
       const snapshot = await fetchFiis();
       state.snapshot = snapshot;
-      state.report = runFiiPipeline(snapshot, state.customFilters);
+      state.report = runFiiPipeline(snapshot, state.activeFilters);
       state.refresh = 'success';
       saveFiiSnapshot(snapshot);
     } catch (err) {
@@ -139,24 +144,30 @@ export function createFiisView(): FiisViewHandle {
     }
   }
 
-  function handleFiltersChange(next: FiiFilterConfig): void {
-    state.customFilters = next;
-    state.filtersModified = isFiiFiltersModified(next, FII_FILTERS);
-    saveFiiFilters(next);
+  /** Chamado a cada input válido no formulário — atualiza draft, sem re-render. */
+  function handleFiltersDraftChange(next: FiiFilterConfig): void {
+    state.draftFilters = next;
+  }
+
+  /** Chamado ao clicar "Aplicar filtros" ou pressionar Enter no formulário. */
+  function handleFiltersApply(): void {
+    state.activeFilters = cloneFiiFilters(state.draftFilters);
+    state.filtersModified = isFiiFiltersModified(state.activeFilters, FII_FILTERS);
+    saveFiiFilters(state.activeFilters);
     if (state.snapshot) {
-      state.report = runFiiPipeline(state.snapshot, next);
+      state.report = runFiiPipeline(state.snapshot, state.activeFilters);
     }
     render();
-    // Filtros podem aprovar FIIs cujo nome ainda não foi buscado.
     void hydrateNames();
   }
 
   function handleFiltersReset(): void {
-    state.customFilters = cloneFiiFilters(FII_FILTERS);
+    state.activeFilters = cloneFiiFilters(FII_FILTERS);
+    state.draftFilters = cloneFiiFilters(FII_FILTERS);
     state.filtersModified = false;
-    saveFiiFilters(state.customFilters);
+    saveFiiFilters(state.activeFilters);
     if (state.snapshot) {
-      state.report = runFiiPipeline(state.snapshot, state.customFilters);
+      state.report = runFiiPipeline(state.snapshot, state.activeFilters);
     }
     render();
     void hydrateNames();
@@ -257,9 +268,11 @@ export function createFiisView(): FiisViewHandle {
     });
 
     renderFiiFiltersPanel(filtersHost, {
-      current: state.customFilters,
+      draft: state.draftFilters,
+      active: state.activeFilters,
       modified: state.filtersModified,
-      onChange: handleFiltersChange,
+      onChange: handleFiltersDraftChange,
+      onApply: handleFiltersApply,
       onReset: handleFiltersReset,
     });
 
