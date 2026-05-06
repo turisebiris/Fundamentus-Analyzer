@@ -1,17 +1,16 @@
 /**
  * Painel interativo de filtros eliminatórios das ações (rules.md).
  *
- * O usuário ajusta thresholds em tempo real; cada mudança válida dispara
- * `onChange(filters)` na view, que recalcula o pipeline com os novos valores.
+ * Estado interno (closure-local por render):
+ *   currentDraft   — último draft válido (inicia em props.draft)
+ *   erroredFields  — Set de IDs com erro de validação ativo
+ *   applyButton    — referência direta para mutação de .disabled sem re-render
  *
- * Validação:
- *   - Cada campo tem um floor (mínimo permitido) e um ceiling (máximo permitido).
- *   - Filtros de ações NÃO podem afrouxar abaixo de STOCK_FILTERS — esses são
- *     os mesmos thresholds usados pelo pré-filtro server-side em /api/stocks.
- *     Afrouxar deixaria papéis sem enrichment de setor/subsetor, quebrando a
- *     classificação de banco/seguradora/holding.
- *   - Em vez de clamp silencioso, valores inválidos exibem erro inline e NÃO
- *     são aplicados ao pipeline (o último valor válido permanece em vigor).
+ * Fluxo:
+ *   input válido   → atualiza currentDraft, chama onChange, recomputa Apply
+ *   input inválido → adiciona ao erroredFields, bloqueia Apply (sem onChange)
+ *   Aplicar/Enter  → chama onApply apenas se botão habilitado
+ *   Resetar        → chama onReset (view recria o painel com defaults)
  */
 
 import {
@@ -21,33 +20,30 @@ import {
 } from '../../shared/stocks/config.js';
 
 export interface FiltersPanelProps {
-  current: StockFilterConfig;
+  draft: StockFilterConfig;
+  active: StockFilterConfig;
   modified: boolean;
   onChange: (next: StockFilterConfig) => void;
+  onApply: () => void;
   onReset: () => void;
 }
 
-/**
- * Floors e ceilings (mínimos e máximos absolutos por campo). Para ações, os
- * floors coincidem com STOCK_FILTERS — usuário pode apenas tighten.
- */
 const STOCK_FLOORS = {
-  dividendYieldMin: STOCK_FILTERS.dividendYield.min,   // ≥ 0.06
-  plMin: STOCK_FILTERS.pl.min,                          // ≥ 3
-  plMax: STOCK_FILTERS.pl.max,                          // ≤ 10
-  pvpMax: STOCK_FILTERS.pvp.max,                        // ≤ 10
-  roeMin: STOCK_FILTERS.roe.min,                        // ≥ 0.12
-  liquidity2mMin: STOCK_FILTERS.liquidity2m.min,        // ≥ 1_000_000
+  dividendYieldMin: STOCK_FILTERS.dividendYield.min,
+  plMin: STOCK_FILTERS.pl.min,
+  plMax: STOCK_FILTERS.pl.max,
+  pvpMax: STOCK_FILTERS.pvp.max,
+  roeMin: STOCK_FILTERS.roe.min,
+  liquidity2mMin: STOCK_FILTERS.liquidity2m.min,
 } as const;
 
-/** Ceilings de sanidade (acima disso o filtro perde sentido prático). */
 const STOCK_CEILINGS = {
-  dividendYieldMin: 0.5,     // 50%
-  plMin: STOCK_FILTERS.pl.max,    // não pode ultrapassar pl.max
+  dividendYieldMin: 0.5,
+  plMin: STOCK_FILTERS.pl.max,
   plMax: 50,
   pvpMax: 100,
-  roeMin: 1.0,               // 100%
-  liquidity2mMin: 1e9,       // 1B
+  roeMin: 1.0,
+  liquidity2mMin: 1e9,
 } as const;
 
 interface FieldSpec {
@@ -55,18 +51,9 @@ interface FieldSpec {
   label: string;
   unit: 'percent' | 'ratio' | 'integer';
   step: number;
-  /** Lê o valor numérico do filtro atual. */
   read: (f: StockFilterConfig) => number;
-  /** Floor absoluto (não pode ir abaixo). */
   floor: number;
-  /** Ceiling absoluto (não pode ir acima). */
   ceiling: number;
-  /**
-   * Aplica um novo valor a uma cópia do filtro. Pode aplicar regras de
-   * coerência (ex: pl.min não pode ultrapassar pl.max). Retorna `null` se o
-   * valor for inconsistente com OUTROS campos (não com floor/ceiling — esses
-   * são tratados pelo input antes).
-   */
   apply: (f: StockFilterConfig, value: number) => StockFilterConfig | null;
 }
 
@@ -133,8 +120,24 @@ const FIELDS: FieldSpec[] = [
   },
 ];
 
+function draftsEqual(a: StockFilterConfig, b: StockFilterConfig): boolean {
+  return (
+    a.dividendYield.min === b.dividendYield.min &&
+    a.pl.min === b.pl.min &&
+    a.pl.max === b.pl.max &&
+    a.netMargin.min === b.netMargin.min &&
+    a.pvp.max === b.pvp.max &&
+    a.roe.min === b.roe.min &&
+    a.liquidity2m.min === b.liquidity2m.min
+  );
+}
+
 export function renderFiltersPanel(container: HTMLElement, props: FiltersPanelProps): void {
   container.innerHTML = '';
+
+  // Closure-local editing state — survives keystrokes between renders.
+  let currentDraft = props.draft;
+  const erroredFields = new Set<string>();
 
   const details = document.createElement('details');
   details.className = 'panel';
@@ -152,14 +155,96 @@ export function renderFiltersPanel(container: HTMLElement, props: FiltersPanelPr
 
   const form = document.createElement('form');
   form.className = 'filters-form';
-  form.addEventListener('submit', (e) => e.preventDefault());
+
+  // Apply button is created before fields so updateApplyState can reference it.
+  const applyButton = document.createElement('button');
+  applyButton.type = 'button';
+  applyButton.className = 'filter-apply';
+  applyButton.textContent = 'Aplicar filtros';
+
+  function updateApplyState(): void {
+    const hasErrors = erroredFields.size > 0;
+    const hasPending = !draftsEqual(currentDraft, props.active);
+    applyButton.disabled = !hasPending || hasErrors;
+    applyButton.title = hasErrors ? 'Corrija os campos inválidos para aplicar' : '';
+  }
+
+  applyButton.addEventListener('click', () => {
+    if (!applyButton.disabled) props.onApply();
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!applyButton.disabled) props.onApply();
+  });
 
   for (const spec of FIELDS) {
-    form.appendChild(buildField(spec, props));
+    const wrapper = document.createElement('div');
+    wrapper.className = 'filter-field';
+
+    const label = document.createElement('label');
+    label.htmlFor = spec.id;
+    label.textContent = spec.label;
+    wrapper.appendChild(label);
+
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.id = spec.id;
+    input.step = String(spec.step);
+    input.value = formatForInput(spec, spec.read(props.draft));
+    input.min = String(toInputUnits(spec, spec.floor));
+    input.max = String(toInputUnits(spec, spec.ceiling));
+    if (spec.unit === 'percent') input.setAttribute('data-unit', '%');
+    wrapper.appendChild(input);
+
+    const errorSlot = document.createElement('span');
+    errorSlot.className = 'filter-field__error';
+    errorSlot.setAttribute('aria-live', 'polite');
+    wrapper.appendChild(errorSlot);
+
+    const markError = (msg: string) => {
+      showError(input, errorSlot, msg);
+      erroredFields.add(spec.id);
+      updateApplyState();
+    };
+
+    input.addEventListener('input', () => {
+      const raw = input.value.trim();
+      if (raw === '') { markError('Valor obrigatório'); return; }
+
+      const parsed = Number(raw.replace(',', '.'));
+      if (!Number.isFinite(parsed)) { markError('Número inválido'); return; }
+
+      const normalized = fromInputUnits(spec, parsed);
+      if (normalized < spec.floor) {
+        markError(`Mínimo permitido: ${formatForInput(spec, spec.floor)}`);
+        return;
+      }
+      if (normalized > spec.ceiling) {
+        markError(`Máximo permitido: ${formatForInput(spec, spec.ceiling)}`);
+        return;
+      }
+
+      const next = spec.apply(currentDraft, normalized);
+      if (next === null) {
+        markError('Inconsistente com outro campo (ex: P/L mín > máx)');
+        return;
+      }
+
+      clearError(input, errorSlot);
+      erroredFields.delete(spec.id);
+      currentDraft = next;
+      props.onChange(next);
+      updateApplyState();
+    });
+
+    form.appendChild(wrapper);
   }
 
   const actions = document.createElement('div');
   actions.className = 'filters-form__actions';
+  updateApplyState();
+  actions.appendChild(applyButton);
 
   const reset = document.createElement('button');
   reset.type = 'button';
@@ -195,67 +280,6 @@ export function renderFiltersPanel(container: HTMLElement, props: FiltersPanelPr
   container.appendChild(details);
 }
 
-function buildField(spec: FieldSpec, props: FiltersPanelProps): HTMLElement {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'filter-field';
-
-  const label = document.createElement('label');
-  label.htmlFor = spec.id;
-  label.textContent = spec.label;
-  wrapper.appendChild(label);
-
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.id = spec.id;
-  input.step = spec.unit === 'percent' ? String(spec.step) : String(spec.step);
-  input.value = formatForInput(spec, spec.read(props.current));
-  input.min = String(toInputUnits(spec, spec.floor));
-  input.max = String(toInputUnits(spec, spec.ceiling));
-  if (spec.unit === 'percent') input.setAttribute('data-unit', '%');
-  wrapper.appendChild(input);
-
-  const error = document.createElement('span');
-  error.className = 'filter-field__error';
-  error.setAttribute('aria-live', 'polite');
-  wrapper.appendChild(error);
-
-  input.addEventListener('input', () => {
-    const raw = input.value.trim();
-    if (raw === '') {
-      showError(input, error, 'Valor obrigatório');
-      return;
-    }
-
-    const parsed = Number(raw.replace(',', '.'));
-    if (!Number.isFinite(parsed)) {
-      showError(input, error, 'Número inválido');
-      return;
-    }
-
-    const normalized = fromInputUnits(spec, parsed);
-
-    if (normalized < spec.floor) {
-      showError(input, error, `Mínimo permitido: ${formatForInput(spec, spec.floor)}`);
-      return;
-    }
-    if (normalized > spec.ceiling) {
-      showError(input, error, `Máximo permitido: ${formatForInput(spec, spec.ceiling)}`);
-      return;
-    }
-
-    const next = spec.apply(props.current, normalized);
-    if (next === null) {
-      showError(input, error, 'Inconsistente com outro campo (ex: P/L mín > máx)');
-      return;
-    }
-
-    clearError(input, error);
-    props.onChange(next);
-  });
-
-  return wrapper;
-}
-
 function showError(input: HTMLInputElement, slot: HTMLElement, message: string): void {
   input.classList.add('filter-field__input--error');
   slot.textContent = message;
@@ -266,7 +290,6 @@ function clearError(input: HTMLInputElement, slot: HTMLElement): void {
   slot.textContent = '';
 }
 
-/** Converte valor interno (ex: 0.06 para DY) para unidade exibida no input (6). */
 function toInputUnits(spec: FieldSpec, value: number): number {
   return spec.unit === 'percent' ? round(value * 100, 1) : value;
 }
