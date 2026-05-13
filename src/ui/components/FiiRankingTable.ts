@@ -126,8 +126,8 @@ export interface FiiRankingTableState {
   /** 'top10' mostra "Top 10 FIIs aprovados"; 'all' mostra "Todos os FIIs aprovados (N)". */
   mode?: 'top10' | 'all';
   /**
-   * Nomes resolvidos via cache do frontend (`fii-name-cache`). Tickers
-   * ausentes ou com valor `null` mostram "—" na coluna Nome.
+   * Nomes resolvidos a partir do JSON estático `public/data/fii-names.json`
+   * (carregado via `loadFiiNames`). Tickers ausentes mostram "—".
    */
   resolvedNames?: Record<string, string | null>;
 }

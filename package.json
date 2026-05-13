@@ -5,24 +5,31 @@
   "type": "module",
   "description": "Ranking de ações brasileiras com dados do Fundamentus.",
   "scripts": {
-    "dev": "netlify dev",
+    "app": "concurrently -k -n vite,api -c blue,green \"vite --open\" \"tsx watch server/index.ts\"",
+    "dev": "concurrently -k -n vite,api -c blue,green \"npm:dev:vite\" \"npm:dev:server\"",
     "dev:vite": "vite",
+    "dev:server": "tsx watch server/index.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "scrape:fii-names": "tsx scripts/scrape-fii-names.ts",
+    "scrape:stock-meta": "tsx scripts/scrape-stock-meta.ts",
+    "scrape:all": "npm run scrape:stock-meta && npm run scrape:fii-names"
   },
   "devDependencies": {
-    "@netlify/functions": "^2.8.2",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.12.0",
-    "netlify-cli": "^17.37.1",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.8",
     "vitest": "^2.1.2"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
+    "express": "^5.2.1",
     "undici": "^6.19.8"
   }
 }
