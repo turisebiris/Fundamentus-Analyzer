@@ -26,9 +26,20 @@ export async function fetchHtml(url: string, opts: FetchHtmlOptions = {}): Promi
 
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const t0 = Date.now();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[debug][fetchHtml] TIMEOUT após ${timeoutMs}ms (attempt=${attempt}) url=${url}`,
+      );
+      controller.abort();
+    }, timeoutMs);
     try {
+      // eslint-disable-next-line no-console
+      console.log(`[debug][fetchHtml] attempt=${attempt} GET ${url}`);
       const res = await fetch(url, {
         signal: controller.signal,
         headers: {
@@ -37,8 +48,16 @@ export async function fetchHtml(url: string, opts: FetchHtmlOptions = {}): Promi
           Accept: 'text/html,application/xhtml+xml,*/*;q=0.8',
         },
       });
+      // eslint-disable-next-line no-console
+      console.log(
+        `[debug][fetchHtml] response status=${res.status} (${Date.now() - t0}ms) attempt=${attempt}`,
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status} ao requisitar ${url}`);
       const buffer = await res.arrayBuffer();
+      // eslint-disable-next-line no-console
+      console.log(
+        `[debug][fetchHtml] body lido (${buffer.byteLength} bytes, ${Date.now() - t0}ms) attempt=${attempt}`,
+      );
       const contentType = res.headers.get('content-type') ?? '';
       const charset =
         /charset=([^;]+)/i.exec(contentType)?.[1]?.trim().toLowerCase() ?? 'utf-8';
@@ -47,6 +66,11 @@ export async function fetchHtml(url: string, opts: FetchHtmlOptions = {}): Promi
       );
     } catch (err) {
       lastErr = err;
+      const reason = timedOut ? 'timeout' : err instanceof Error ? err.message : String(err);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[debug][fetchHtml] FALHA attempt=${attempt} (${Date.now() - t0}ms) motivo=${reason}`,
+      );
       if (attempt < maxRetries) {
         const backoff = 250 * 2 ** attempt;
         await new Promise((resolve) => setTimeout(resolve, backoff));

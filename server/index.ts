@@ -17,6 +17,12 @@ const PORT = Number(process.env.PORT ?? 8888);
 
 const app = express();
 
+app.use((req, _res, next) => {
+  // eslint-disable-next-line no-console
+  console.log(`[debug][http] ${req.method} ${req.url}`);
+  next();
+});
+
 app.get('/api/stocks', stocksHandler);
 app.get('/api/fiis', fiisHandler);
 

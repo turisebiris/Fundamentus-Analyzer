@@ -14,9 +14,23 @@ import { parseResultadoHtml } from '../../src/assets/stocks/adapter.js';
 import type { RawStock } from '../../src/core/types.js';
 
 export async function stocksHandler(_req: Request, res: Response): Promise<void> {
+  const t0 = Date.now();
+  // eslint-disable-next-line no-console
+  console.log('[debug][stocks] entrada GET /api/stocks');
   try {
+    // eslint-disable-next-line no-console
+    console.log('[debug][stocks] antes fetchHtml(resultado.php)');
     const html = await fetchHtml(`${FUNDAMENTUS_BASE}/resultado.php`);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[debug][stocks] depois fetchHtml ok (${html.length} chars, ${Date.now() - t0}ms)`,
+    );
+
     const list = parseResultadoHtml(html);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[debug][stocks] depois parseResultadoHtml (${list.length} itens, ${Date.now() - t0}ms)`,
+    );
 
     // Backend devolve apenas o que vem da lista; companyName/sector/subsector
     // ficam null aqui — o merge com stock-meta.json acontece no cliente.
@@ -34,6 +48,8 @@ export async function stocksHandler(_req: Request, res: Response): Promise<void>
       subsector: null,
     }));
 
+    // eslint-disable-next-line no-console
+    console.log(`[debug][stocks] antes res.json (${Date.now() - t0}ms)`);
     res
       .status(200)
       .set('Cache-Control', 'no-store')
@@ -42,8 +58,12 @@ export async function stocksHandler(_req: Request, res: Response): Promise<void>
         totalCollected: list.length,
         stocks,
       });
+    // eslint-disable-next-line no-console
+    console.log(`[debug][stocks] resposta enviada (${Date.now() - t0}ms)`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error(`[debug][stocks] ERRO após ${Date.now() - t0}ms: ${message}`);
     res.status(502).json({ error: message });
   }
 }
