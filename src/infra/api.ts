@@ -1,15 +1,20 @@
 /**
- * Cliente HTTP para as funções serverless /api/stocks e /api/fiis.
- * O frontend NÃO acessa fundamentus.com.br diretamente (CORS).
+ * Cliente HTTP para as rotas locais /api/stocks e /api/fiis.
+ * O frontend NÃO acessa fundamentus.com.br diretamente.
+ *
+ * Após a migração local-first: as listas vêm crus do backend Express e o
+ * enriquecimento (companyName/sector/subsector para ações; name para FIIs)
+ * é mesclado a partir dos JSONs estáticos em public/data/.
  */
 
 import type { RawStock, StockSnapshot } from '../core/types.js';
 import type { FiiSnapshot, RawFii } from '../assets/fiis/types.js';
+import { loadStockMeta } from './static-meta.js';
 
 interface StocksApiResponse {
   timestamp: string;
   totalCollected: number;
-  enrichedCount: number;
+  enrichedCount?: number;
   stocks: RawStock[];
 }
 
@@ -29,20 +34,36 @@ async function extractErrorDetail(res: Response): Promise<string> {
 }
 
 export async function fetchStocks(signal?: AbortSignal): Promise<StockSnapshot> {
-  const res = await fetch('/api/stocks', {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    signal,
-  });
+  const [res, meta] = await Promise.all([
+    fetch('/api/stocks', {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal,
+    }),
+    loadStockMeta(),
+  ]);
   if (!res.ok) {
     const detail = await extractErrorDetail(res);
     throw new Error(`Falha ao atualizar dados (HTTP ${res.status})${detail}`);
   }
   const data = (await res.json()) as StocksApiResponse;
+
+  // Merge: backend retorna lista crua; companyName/sector/subsector vêm do
+  // JSON estático. Tickers ausentes do JSON ficam com null (pipeline trata).
+  const merged: RawStock[] = data.stocks.map((s) => {
+    const m = meta[s.ticker];
+    return {
+      ...s,
+      companyName: s.companyName ?? m?.companyName ?? null,
+      sector: s.sector ?? m?.sector ?? null,
+      subsector: s.subsector ?? m?.subsector ?? null,
+    };
+  });
+
   return {
     timestamp: data.timestamp,
     totalCollected: data.totalCollected,
-    stocks: data.stocks,
+    stocks: merged,
   };
 }
 
@@ -64,29 +85,3 @@ export async function fetchFiis(signal?: AbortSignal): Promise<FiiSnapshot> {
   };
 }
 
-interface FiiNameApiResponse {
-  ticker: string;
-  name: string | null;
-}
-
-/**
- * Resultado distinto de "sem nome" (resposta válida com nome ausente, retorna
- * `{ name: null }`) e "erro de rede/upstream" (lança). Apenas o primeiro caso
- * deve ser cacheado pelo chamador — o segundo precisa ser re-tentado depois.
- */
-export async function fetchFiiName(
-  ticker: string,
-  signal?: AbortSignal,
-): Promise<string | null> {
-  const res = await fetch(`/api/fii-name?ticker=${encodeURIComponent(ticker)}`, {
-    method: 'GET',
-    headers: { Accept: 'application/json' },
-    signal,
-  });
-  if (!res.ok) {
-    const detail = await extractErrorDetail(res);
-    throw new Error(`Falha ao buscar nome do FII ${ticker} (HTTP ${res.status})${detail}`);
-  }
-  const data = (await res.json()) as FiiNameApiResponse;
-  return data.name ?? null;
-}

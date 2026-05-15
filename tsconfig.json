@@ -26,6 +26,6 @@
       "@utils/*": ["src/utils/*"]
     }
   },
-  "include": ["src", "netlify/functions", "tests", "vite.config.ts"],
-  "exclude": ["node_modules", "dist", ".netlify"]
+  "include": ["src", "tests", "vite.config.ts", "server", "scripts"],
+  "exclude": ["node_modules", "dist"]
 }

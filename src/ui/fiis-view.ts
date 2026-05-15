@@ -2,26 +2,22 @@
  * View da aba de FIIs. Pipeline independente do módulo de ações
  * (rules_fiis.md): fetch próprio (/api/fiis), snapshot em chave separada,
  * regras próprias (config/pipeline de FIIs). NÃO reaproveita regras de ações.
+ *
+ * Após a migração local-first: nomes vêm do JSON estático
+ * `public/data/fii-names.json` (carregado uma vez via loadFiiNames).
  */
 
-import { fetchFiis, fetchFiiName } from '../infra/api.js';
+import { fetchFiis } from '../infra/api.js';
 import {
   loadFiiSnapshot,
   saveFiiSnapshot,
   loadFiiFilters,
   saveFiiFilters,
 } from '../infra/storage.js';
-import {
-  loadFiiNameCache,
-  saveFiiNameCache,
-  getCachedName,
-  upsertCachedName,
-  trackInFlight,
-  type FiiNameCache,
-} from '../infra/fii-name-cache.js';
+import { loadFiiNames } from '../infra/static-meta.js';
 import { runFiiPipeline } from '../assets/fiis/pipeline.js';
 import { FII_FILTERS, type FiiFilterConfig } from '../assets/fiis/config.js';
-import type { FiiReport, FiiSnapshot, RankedFii } from '../assets/fiis/types.js';
+import type { FiiReport, FiiSnapshot } from '../assets/fiis/types.js';
 import { renderRefreshButton } from './components/RefreshButton.js';
 import { renderFiiRankingTable } from './components/FiiRankingTable.js';
 import { renderFiiFiltersPanel } from './components/FiiFiltersPanel.js';
@@ -30,8 +26,6 @@ import type { RefreshState, SortDirection, SortState } from './types.js';
 
 type DisplayMode = 'top10' | 'all';
 
-const NAME_FETCH_CONCURRENCY = 4;
-
 interface FiisViewState {
   refresh: RefreshState;
   error: string | null;
@@ -39,7 +33,8 @@ interface FiisViewState {
   report: FiiReport | null;
   sort: SortState;
   displayMode: DisplayMode;
-  nameCache: FiiNameCache;
+  /** Mapa ticker → nome carregado do JSON estático (vazio até loadFiiNames resolver). */
+  resolvedNames: Record<string, string>;
   /** Valores sendo editados no formulário (não aplicados ao pipeline). */
   draftFilters: FiiFilterConfig;
   /** Filtros efetivamente aplicados ao pipeline e persistidos. */
@@ -85,7 +80,7 @@ export function createFiisView(): FiisViewHandle {
     report: null,
     sort: { key: 'position', direction: 'asc' },
     displayMode: 'top10',
-    nameCache: loadFiiNameCache(),
+    resolvedNames: {},
     activeFilters: initialFilters,
     draftFilters: cloneFiiFilters(initialFilters),
     filtersModified: isFiiFiltersModified(initialFilters, FII_FILTERS),
@@ -140,7 +135,6 @@ export function createFiisView(): FiisViewHandle {
       state.error = err instanceof Error ? err.message : String(err);
     } finally {
       render();
-      void hydrateNames();
     }
   }
 
@@ -158,7 +152,6 @@ export function createFiisView(): FiisViewHandle {
       state.report = runFiiPipeline(state.snapshot, state.activeFilters);
     }
     render();
-    void hydrateNames();
   }
 
   function handleFiltersReset(): void {
@@ -170,68 +163,18 @@ export function createFiisView(): FiisViewHandle {
       state.report = runFiiPipeline(state.snapshot, state.activeFilters);
     }
     render();
-    void hydrateNames();
   }
 
   /**
-   * Constrói o objeto `resolvedNames` consumido pelo `FiiRankingTable` a partir
-   * do cache. Tickers ausentes ou com `null` mostram "—" na coluna Nome.
+   * Carrega os nomes do JSON estático uma vez por sessão. Erro de rede cai num
+   * mapa vazio (UI mostra "—" nos nomes); refresh do browser tenta de novo.
    */
-  function buildResolvedNames(): Record<string, string | null> {
-    const out: Record<string, string | null> = {};
-    if (!state.report) return out;
-    for (const f of state.report.approved) {
-      const cached = getCachedName(state.nameCache, f.ticker);
-      if (cached) out[f.ticker] = cached;
-    }
-    return out;
-  }
-
-  /**
-   * Busca incrementalmente os nomes dos FIIs aprovados que ainda não estão em
-   * cache. Pool com concorrência limitada para não sobrecarregar a serverless.
-   *
-   * - Erros de rede NÃO populam o cache (re-tenta numa próxima carga).
-   * - `null` (resposta válida sem nome) é cacheado para evitar loop.
-   * - In-flight set protege contra duplicação por refreshes rápidos.
-   * - Re-render só após todas as buscas (1 render por hidratação completa
-   *   evita flicker em rede rápida; aprovados em cache já apareceram no
-   *   render anterior).
-   */
-  async function hydrateNames(): Promise<void> {
-    if (!state.report) return;
-
-    const missing: RankedFii[] = state.report.approved.filter(
-      (f) => getCachedName(state.nameCache, f.ticker) === undefined,
-    );
-    if (missing.length === 0) return;
-
-    let cursor = 0;
-    let updated = false;
-
-    const workers = Array.from(
-      { length: Math.min(NAME_FETCH_CONCURRENCY, missing.length) },
-      async () => {
-        while (cursor < missing.length) {
-          const fii = missing[cursor++]!;
-          try {
-            const name = await trackInFlight(fii.ticker, () => fetchFiiName(fii.ticker));
-            if (name !== null) {
-              upsertCachedName(state.nameCache, fii.ticker, name);
-              updated = true;
-            }
-          } catch {
-            // Erro de rede: NÃO cachear — re-tenta na próxima carga.
-          }
-        }
-      },
-    );
-
-    await Promise.all(workers);
-
-    if (updated) {
-      saveFiiNameCache(state.nameCache);
+  async function loadNames(): Promise<void> {
+    try {
+      state.resolvedNames = await loadFiiNames();
       render();
+    } catch {
+      // já tratado em loadFiiNames (fallback {})
     }
   }
 
@@ -315,7 +258,7 @@ export function createFiisView(): FiisViewHandle {
         {
           sort: state.sort,
           mode: state.displayMode,
-          resolvedNames: buildResolvedNames(),
+          resolvedNames: state.resolvedNames,
         },
         handleSort,
       );
@@ -334,9 +277,7 @@ export function createFiisView(): FiisViewHandle {
       root = el;
       layout();
       render();
-      // Snapshot persistido pode ter aprovados sem nome no cache — busca
-      // incremental dispara no mount.
-      void hydrateNames();
+      void loadNames();
     },
     unmount() {
       if (root) root.innerHTML = '';
