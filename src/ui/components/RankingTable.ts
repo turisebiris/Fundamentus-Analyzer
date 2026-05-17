@@ -4,7 +4,7 @@
 
 import type { RankedStock } from '../../core/types.js';
 import type { IndicatorKey } from '../../shared/stocks/config.js';
-import { formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
+import { formatCurrency, formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
 import type { SortDirection, SortState } from '../types.js';
 
 type ColumnKey =
@@ -12,6 +12,7 @@ type ColumnKey =
   | 'ticker'
   | 'companyName'
   | 'sector'
+  | 'price'
   | 'dividendYield'
   | 'pl'
   | 'netMargin'
@@ -58,6 +59,13 @@ const COLUMNS: Column[] = [
     get: (s) => s.sector,
     format: (v) => (v == null || v === '' ? '—' : String(v)),
     numeric: false,
+  },
+  {
+    key: 'price',
+    label: 'Cotação',
+    get: (s) => s.price,
+    format: (v) => formatCurrency(v as number | null),
+    numeric: true,
   },
   {
     key: 'dividendYield',
