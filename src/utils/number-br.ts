@@ -62,3 +62,8 @@ export function formatInteger(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return '—';
   return new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 0 }).format(value);
 }
+
+export function formatCurrency(value: number | null, digits = 2): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return `R$ ${value.toFixed(digits).replace('.', ',')}`;
+}

@@ -4,7 +4,7 @@
 
 import type { RankedFii } from '../../assets/fiis/types.js';
 import type { FiiIndicatorKey } from '../../assets/fiis/config.js';
-import { formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
+import { formatCurrency, formatDecimal, formatInteger, formatPercent } from '../../utils/number-br.js';
 import { normalizeFiiName } from '../../utils/fii-name-normalize.js';
 import type { SortDirection, SortState } from '../types.js';
 
@@ -69,7 +69,7 @@ const COLUMNS: Column[] = [
     key: 'price',
     label: 'Cotação',
     get: (f) => f.price,
-    format: (v) => formatDecimal(v as number | null),
+    format: (v) => formatCurrency(v as number | null),
     numeric: true,
   },
   {
